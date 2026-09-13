@@ -46,7 +46,7 @@ def _download_zip() -> bytes:
         return resp.content
 
     try:
-        return with_retry(_fetch, retries=1)
+        return with_retry(_fetch, retries=0)  # ~15MB file — a retry just doubles the wait
     except Exception as exc:
         raise SourceUnavailable(
             source_name="FAA Terminal Area Forecast (TAF)",

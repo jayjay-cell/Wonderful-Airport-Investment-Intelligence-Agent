@@ -29,7 +29,7 @@ _URL = (
     "passenger/ARP-cy2024-all-enplanements.xlsx"
 )
 _COVERAGE_YEAR = "CY2024"
-_TIMEOUT = 20.0
+_TIMEOUT = 8.0
 
 _HUB_CODE_MAP = {
     "L": HubClass.LARGE,
@@ -52,7 +52,7 @@ def _load_table() -> dict[str, dict]:
         return resp.content
 
     try:
-        content = with_retry(_fetch, retries=1)
+        content = with_retry(_fetch, retries=0)
     except Exception as exc:
         raise SourceUnavailable(
             source_name="FAA Commercial Service Enplanements",
