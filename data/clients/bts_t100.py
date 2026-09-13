@@ -1,32 +1,31 @@
-"""BTS T-100 Segment/Market connector — live, on-demand, no airport-coverage
-restriction, per the plan's T-100 decision.
+"""BTS T-100 Segment/Market connector — live, on-demand, no pre-downloaded
+snapshot and no airport-coverage restriction, since BTS publishes no
+per-airport API for this dataset.
 
-VERIFIED LIVE during implementation (feasibility proof, see plan Section 4):
+Notes on the underlying government form (transtats.bts.gov), none of which
+is documented anywhere except by inspecting the page:
 - The correct table is T-100 SEGMENT (has DEPARTURES_PERFORMED/SCHEDULED and
   SEATS), reached via gnoyr_VQ=FMG. The gnoyr_VQ=FMF page is T-100 MARKET
   (passengers/freight/mail only, no departures or seats) and must not be
   used for long-haul or capacity calculations.
-- The outer <form id="form1"> posts back to itself (DL_SelectFields.aspx),
-  NOT to Search.asp (Search.asp is only the small sidebar site-search box
-  and is a red herring in the page's markup).
+- The outer <form id="form1"> posts back to itself (DL_SelectFields.aspx).
 - The form's only origin-scoping mechanism is `cboGeography` (US state, or
   "All") plus `cboYear`/`cboPeriod` (month or "All" for the year) — there is
-  no direct per-airport-code filter field on this form. Using
-  cboGeography="All" is what makes this a genuinely NATIONAL download.
-- The POST response body IS the zip file directly (Content-Type:
+  no per-airport-code filter field. Using cboGeography="All" is what makes
+  this a genuinely national download.
+- The POST response body is the zip file directly (Content-Type:
   application/zip) — no separate "resolve a generated download link" step.
-- The zip contains two files: "Documentation.csv" (a field glossary — must
+- The zip contains two files: "Documentation.csv" (a field glossary, must
   be skipped) and the actual data CSV.
 
-RESOURCE-ORIENTED CACHING (fixed root cause: cboGeography="All" means every
-call already downloads the FULL national dataset for the requested
-year/month, then discarded everything except one airport's rows. The cache
-key is now the year/month resource itself, not the airport — the national
-zip is downloaded and parsed exactly ONCE per year/month (single-flight via
-data.cache.get_or_load), producing an index of routes keyed by origin
-airport, and any number of airports for that period are served from the
-one shared index. Assessing 8 airports for the same year now triggers one
-form submission/download, not eight.
+Caching is resource-oriented, not per-airport: since cboGeography="All"
+means every request already downloads the full national dataset for the
+requested year/month, the cache key is that year/month resource, not the
+airport. The national zip is downloaded and parsed exactly once per
+year/month (single-flight via data.cache.get_or_load), producing an index
+of routes keyed by origin airport; any number of airports for that period
+are served from the one shared index. Assessing 8 airports for the same
+year triggers one form submission/download, not eight.
 
 Interface contract:
     get_routes(origin="ANC", year=2024, fields=[...])
@@ -50,16 +49,12 @@ _FORM_URL = (
     "https://transtats.bts.gov/DL_SelectFields.aspx"
     "?gnoyr_VQ=FMG&QO_fu146_anzr=Nv4+Pn44vr45"
 )
-# CORRECTED after a live-manual-check regression: an earlier pass set this
-# to 8.0s with zero retries, which measurably broke live T-100 requests
-# (the POST — the actual form submission + zip download — legitimately
-# needs more than 8s on a normal connection; the GET alone consistently
-# succeeds under 4s, but the POST was observed timing out silently with no
-# retry, surfacing as SOURCE_UNAVAILABLE on a real ANC long-haul query).
-# 20s + 1 retry gives real headroom for the slower POST step while still
-# being a small fraction of the old 90s x 2-3 retries (up to 360s) that
-# originally caused multi-minute hangs. This still only happens ONCE per
-# year/month resource regardless of how many airports ask (single-flight).
+# The POST (form submission + zip download) reliably takes longer than the
+# GET (which resolves in under 4s): a short timeout with no retry produces
+# spurious SOURCE_UNAVAILABLE results on an otherwise healthy connection.
+# 20s + 1 retry gives the POST step headroom without risking a multi-minute
+# hang, and this cost is paid once per year/month resource regardless of
+# how many airports ask (single-flight, see module docstring).
 _TIMEOUT = 20.0
 
 _SELECTED_FIELDS = [
@@ -235,20 +230,17 @@ def filter_passenger_routes(routes: list[dict]) -> list[dict]:
     """Excludes cargo-only route records (zero passengers, nonzero
     departures) before a long-haul-share or passenger-demand calculation.
 
-    IMPORTANT (discovered during implementation, verified against live ANC
-    2024 data): T-100 Segment includes ALL scheduled operations, not just
-    passenger service. At ANC specifically, cargo-only routes account for
-    ~55% of total departures (51,102 of 93,654 in 2024) — ANC is a major
-    cargo hub. Without this filter, a long-haul-share calculation silently
-    mixes cargo and passenger operations, which contradicts
-    methodology.yaml's long_haul_basis_default definition of "scheduled
-    PASSENGER departures." This is not a hypothetical edge case; it
-    materially changes the answer (13.75% vs 45.07% long-haul share for
-    ANC 2024 in the passenger-only vs. all-operations calculation observed
-    during testing) and must always be applied for long-haul/passenger
-    demand questions. A separate, explicit all-operations (cargo included)
-    view may be offered for flight-capacity/operations-focused questions,
-    but must be clearly labeled as including cargo when used.
+    T-100 Segment includes all scheduled operations, not just passenger
+    service. At a major cargo hub like ANC, cargo-only routes can account
+    for roughly half of total departures — without this filter, a
+    long-haul-share calculation silently mixes cargo and passenger
+    operations, contradicting methodology.yaml's definition of "performed
+    passenger departures" and materially changing the result (observed:
+    13.75% vs. 45.07% long-haul share for ANC 2024, passenger-only vs.
+    all-operations). This filter must always be applied for long-haul or
+    passenger-demand questions. A separate, explicitly labeled
+    all-operations view may be offered for flight-capacity/operations
+    questions where cargo is relevant.
     """
     return [r for r in routes if r["passengers"] > 0]
 

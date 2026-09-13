@@ -1,9 +1,8 @@
-"""Ranking: score every candidate with opportunity_score(), sort. That's
-the whole calculation -- no separate sort-key logic per investment focus
-(the old version had 3 near-duplicate tuple-sort functions; the score
-itself already encodes which factors matter most, via the per-focus
-weights in core/scoring.py, so there is nothing left for ranking to decide
-beyond "higher score wins").
+"""Ranking: score every candidate with opportunity_score(), sort. The score
+itself already encodes which factors matter most for the given investment
+focus (see the per-focus weights in core/scoring.py), so there is no
+separate sort-key logic to maintain per focus -- ranking is just "higher
+score wins."
 """
 
 from __future__ import annotations

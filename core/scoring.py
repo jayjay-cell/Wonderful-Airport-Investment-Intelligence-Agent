@@ -2,25 +2,24 @@
 
     congestion_score()   -- from operational metrics (delay/taxi/cancel).
                              Used by compare_airports_tool directly, and
-                             reused INSIDE opportunity_score() below.
+                             reused inside opportunity_score() below.
     opportunity_score()  -- from demand/pressure/long-haul metrics,
                              including congestion_score(). Used by
-                             rank_airports_tool ONLY.
-
-Replaces the previous 7-stage pipeline (classifications.py, bottleneck.py,
-gates.py, confidence.py: Demand -> Pressure -> Need -> Bottleneck -> Fit ->
-Gates -> Actionability -> Confidence -> FinalClassification). That pipeline
-mostly gated on ResearchEvidence, which was never actually populated
-anywhere in the system -- so most of its branches were structurally
-unreachable in real use, not simplifying logic, just adding stages that
-never fired. Removed outright rather than folded in, per explicit
-instruction.
+                             rank_airports_tool only.
 
 Both scores are 0-100. Neither is influenced by research or by the LLM --
-research/LLM output may EXPLAIN a score after the fact (see
-tools/research_facts.py), never feed into computing it. A missing input
-metric is excluded from the weighted average and recorded in
-Score.missing -- never coerced to 0.
+research/LLM output may explain a score after the fact (see
+tools/research_facts.py), but never feeds into computing it. A missing
+input metric is excluded from the weighted average and the remaining
+weights are renormalized to sum to 1.0 -- recorded in Score.missing, never
+coerced to 0.
+
+Renormalizing keeps `value` comparable across candidates, but it also means
+a score computed from partial data can look similar to one computed from
+complete data. Every Score therefore also reports inputs_available,
+inputs_expected, and coverage_ratio (core/models.py), so a caller can tell
+"high score, thin data" apart from "high score, full data" instead of
+trusting value alone.
 """
 
 from __future__ import annotations
@@ -46,6 +45,9 @@ def _normalize(value: float, reference: float) -> float:
     if reference <= 0:
         return 0.0
     return max(0.0, min(1.0, value / reference))
+
+
+_CONGESTION_INPUTS_EXPECTED = 3
 
 
 def congestion_score(profile: AirportProfile) -> Score:
@@ -75,6 +77,7 @@ def congestion_score(profile: AirportProfile) -> Score:
         return Score(
             value=None, missing=missing,
             limitations=["No delay-rate, taxi-out, or cancellation-rate data is available; congestion cannot be scored."],
+            inputs_available=0, inputs_expected=_CONGESTION_INPUTS_EXPECTED, coverage_ratio=0.0,
         )
 
     avg = sum(v for _, v in parts) / len(parts)
@@ -82,7 +85,11 @@ def congestion_score(profile: AirportProfile) -> Score:
     if missing:
         limitations.append(f"Computed from {len(parts)} of 3 congestion signals; {', '.join(missing)} unavailable.")
 
-    return Score(value=round(avg * 100, 1), basis=[name for name, _ in parts], missing=missing, limitations=limitations)
+    return Score(
+        value=round(avg * 100, 1), basis=[name for name, _ in parts], missing=missing, limitations=limitations,
+        inputs_available=len(parts), inputs_expected=_CONGESTION_INPUTS_EXPECTED,
+        coverage_ratio=round(len(parts) / _CONGESTION_INPUTS_EXPECTED, 2),
+    )
 
 
 # Per-focus weights: how much each input contributes to the Opportunity
@@ -142,10 +149,13 @@ def opportunity_score(profile: AirportProfile, investment_focus: InvestmentFocus
         else:
             missing.append("long_haul_share_departures")
 
+    inputs_expected = len(weights)
+
     if not raw:
         return Score(
             value=None, missing=missing,
             limitations=["No usable inputs (growth, load factor, congestion, long-haul share all unavailable)."],
+            inputs_available=0, inputs_expected=inputs_expected, coverage_ratio=0.0,
         )
 
     used_weight = sum(weights[k] for k in raw)
@@ -154,9 +164,16 @@ def opportunity_score(profile: AirportProfile, investment_focus: InvestmentFocus
 
     limitations = list(congestion.limitations)
     if missing:
-        limitations.append(f"Computed from {len(raw)} of {len(weights)} scoring inputs for {investment_focus.value}; {', '.join(missing)} unavailable.")
+        limitations.append(
+            f"Computed from {len(raw)} of {inputs_expected} scoring inputs for {investment_focus.value}; "
+            f"{', '.join(missing)} unavailable. The remaining inputs' weights were renormalized to fill the "
+            f"gap, so this score is not directly comparable in reliability to one computed from full data -- "
+            f"see coverage_ratio."
+        )
 
     return Score(
         value=round(score_value, 1) if score_value is not None else None,
         basis=list(raw.keys()), missing=missing, limitations=limitations,
+        inputs_available=len(raw), inputs_expected=inputs_expected,
+        coverage_ratio=round(len(raw) / inputs_expected, 2) if inputs_expected else None,
     )

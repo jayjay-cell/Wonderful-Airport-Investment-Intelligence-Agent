@@ -1,4 +1,3 @@
-# ORIENTATION: THE FRONT DOOR. Defines POST /chat, GET /health. Same shape as NexaTel's app/main.py.
 """FastAPI app -- the real HTTP boundary. POST /chat, GET /health. The
 React UI (and any future UI) talks to this over HTTP only; it never
 imports the agent directly.

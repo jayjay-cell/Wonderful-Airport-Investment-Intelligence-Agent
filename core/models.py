@@ -5,14 +5,11 @@ provenance (direct measurement, proxy signal, or missing) so that
 distinction can never be silently dropped as data flows from data/ through
 core/ to the tool layer.
 
-TRIMMED (per explicit instruction): this used to also define a 7-stage
-classification taxonomy -- Level, Bottleneck, InvestmentFit, Actionability,
-HardGate/SoftFlag, Confidence, FinalClassification, ResearchEvidence,
-ClassificationResult, OpportunityAssessment. All removed. The only
-calculations in this system now are Congestion Score and Opportunity Score
-(core/scoring.py), each a single Score value with a basis/missing/
-limitations breakdown -- see Score below. Research/LLM explanation happens
-outside core/ entirely and never feeds back into a score.
+The only calculations in this system are Congestion Score and Opportunity
+Score (core/scoring.py), each represented as a single Score value with a
+basis/missing/limitations breakdown -- see Score below. Research/LLM
+explanation happens outside core/ entirely and never feeds back into a
+score.
 """
 
 from __future__ import annotations
@@ -128,9 +125,18 @@ class AirportProfile(BaseModel):
 
 # ---------------------------------------------------------------------------
 # Score — the ONE result shape for both Congestion Score and Opportunity
-# Score. Replaces every classification/label/confidence type that used to
-# live here. `value=None` means genuinely unscoreable (too much missing),
-# never a silent 0.
+# Score. `value=None` means genuinely unscoreable (too much missing), never
+# a silent 0.
+#
+# A missing input is dropped from the weighted average and the remaining
+# weights are renormalized to sum to 1.0 (see core/scoring.py) -- this keeps
+# `value` comparable across candidates, but it also means two airports with
+# very different amounts of underlying data can land on a similar-looking
+# score. `coverage_ratio` makes that visible: a high score computed from
+# inputs_available=2/inputs_expected=4 is a genuinely weaker basis for a
+# decision than the same score computed from 4/4, even though `value` alone
+# doesn't show that. Callers ranking or comparing scores should treat
+# coverage_ratio as part of the result, not an optional detail.
 # ---------------------------------------------------------------------------
 
 class Score(BaseModel):
@@ -138,3 +144,6 @@ class Score(BaseModel):
     basis: list[str] = Field(default_factory=list)       # which metrics went into it
     missing: list[str] = Field(default_factory=list)     # which metrics were unavailable
     limitations: list[str] = Field(default_factory=list)  # plain-language caveats
+    inputs_available: int = 0   # how many of the expected inputs had usable data
+    inputs_expected: int = 0    # how many inputs this score type normally considers
+    coverage_ratio: float | None = None  # inputs_available / inputs_expected, or None if inputs_expected == 0

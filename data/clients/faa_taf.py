@@ -1,20 +1,19 @@
 """FAA Terminal Area Forecast (TAF) connector.
 
-Static ZIP download, no auth, verified live. Internal format confirmed as
-XLSX (not DBF). Contains per-airport, per-year enplanement and operations
-data from historical actuals through a ~30-year forecast horizon.
+Static ZIP download, no auth. Internal format is XLSX (not DBF). Contains
+per-airport, per-year enplanement and operations data from historical
+actuals through a ~30-year forecast horizon.
 
-IMPORTANT (verified during implementation): the `locid` column in the
-underlying workbook has trailing whitespace padding (fixed-width-field
-artifact, e.g. "SFO " not "SFO") — all lookups strip before comparing.
+The `locid` column in the underlying workbook has trailing whitespace
+padding (a fixed-width-field artifact, e.g. "SFO " not "SFO") -- all
+lookups strip before comparing.
 
-SHARED-DOWNLOAD FIX (root cause: passenger and operations forecasts each
-independently downloaded the same ~15MB release zip — a cold airport
-profile request downloaded it twice). Now there is exactly one release
-loader (_load_release, single-flight-protected via data.cache.get_or_load)
-that downloads the zip once and reads BOTH the Enplanements.xlsx and
-AirportsOperations.xlsx sheets from that one downloaded archive, caching
-both normalized tables together under one resource key.
+Passenger and operations forecasts live in separate sheets of the same
+~15MB release zip, so there is exactly one release loader (_load_release,
+single-flight-protected via data.cache.get_or_load) that downloads the zip
+once and reads both the Enplanements.xlsx and AirportsOperations.xlsx
+sheets from that one archive, caching both normalized tables under one
+resource key rather than downloading the zip twice.
 """
 
 from __future__ import annotations

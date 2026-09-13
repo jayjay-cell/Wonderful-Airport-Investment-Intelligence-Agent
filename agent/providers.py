@@ -1,9 +1,7 @@
-# ORIENTATION: Sets up Groq / Gemini / OpenRouter and defines the "try one, fall back to the next" logic.
-"""LLM provider fallback -- same pattern as the NexaTel project's
-agent/providers.py: try the default provider, fall back to the next one on
-a recognized "this provider is unavailable" error (rate limit, quota,
-timeout, transport failure). A real bug (bad request, auth failure) is NOT
-swallowed by the fallback loop -- it propagates so it's actually visible.
+"""LLM provider fallback: try the default provider, fall back to the next
+one on a recognized "this provider is unavailable" error (rate limit,
+quota, timeout, transport failure). A real bug (bad request, auth failure)
+is not swallowed by the fallback loop -- it propagates so it stays visible.
 """
 
 from __future__ import annotations
@@ -77,14 +75,11 @@ def _is_openrouter_unavailable(err: Exception) -> bool:
             return True
     except ImportError:
         pass
-    # OpenRouter can return HTTP 200 with an error payload IN the JSON body
-    # (e.g. the underlying model provider -- Nvidia, etc. -- is overloaded).
-    # langchain_openai raises a plain ValueError for that shape, not a typed
-    # openai.*Error, so it would otherwise slip past the checks above and
-    # never be recognized as "this provider is unavailable, try the next
-    # one" -- confirmed live: "Upstream error from Nvidia: Service
-    # temporarily overloaded" (code 502) came through as ValueError and was
-    # not being retried.
+    # OpenRouter can return HTTP 200 with an error payload in the JSON body
+    # (the underlying model provider -- e.g. Nvidia -- is overloaded).
+    # langchain_openai raises a plain ValueError for that shape rather than
+    # a typed openai.*Error, so it needs its own string-based check to be
+    # recognized as retryable instead of propagating as an unhandled bug.
     msg = str(err).lower()
     return (
         "rate limit" in msg or "429" in msg or "timeout" in msg

@@ -8,7 +8,6 @@
 export interface Message {
   role: "user" | "assistant";
   text: string;
-  pending?: boolean;
   isError?: boolean;
 }
 

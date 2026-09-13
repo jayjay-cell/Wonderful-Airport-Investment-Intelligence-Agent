@@ -1,4 +1,3 @@
-# ORIENTATION: TOOL. "Compare congestion at X and Y" -- side by side, flags period mismatches.
 """compare_airports: side-by-side congestion comparison for a small set of
 airports over a common period, using core/scoring.py's congestion_score().
 """
@@ -44,6 +43,7 @@ def compare_airports(airport_codes: list[str]) -> dict:
             "congestion_score": congestion.value,
             "congestion_score_basis": congestion.basis,
             "congestion_score_missing": congestion.missing,
+            "congestion_score_coverage_ratio": congestion.coverage_ratio,
             "limitations": profile_result["limitations"] + congestion.limitations,
         })
 
@@ -62,7 +62,10 @@ def compare_airports(airport_codes: list[str]) -> dict:
             "congestion_score (0-100, higher = more congested) is computed from delay "
             "rate, taxi-out time, and cancellation-rate signals, applied consistently "
             "across the compared airports. Higher traffic volume alone is not equated "
-            "with greater congestion -- see passenger_volume separately from congestion_score."
+            "with greater congestion -- see passenger_volume separately from congestion_score. "
+            "congestion_score_coverage_ratio (0-1) is how many of the 3 expected signals were "
+            "actually available -- a score from partial coverage is a weaker basis for comparison "
+            "than one from full coverage, even if the two values look similar."
             + (" WARNING: the compared airports do not share the same actual data "
                "coverage period -- see periods_by_airport." if period_mismatch else "")
         ),

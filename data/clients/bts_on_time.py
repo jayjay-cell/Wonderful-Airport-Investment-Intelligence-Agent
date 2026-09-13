@@ -4,23 +4,19 @@ Static ZIP download, no auth, verified live with a stable URL pattern:
 PREZIP/On_Time_Reporting_Carrier_On_Time_Performance_1987_present_{Y}_{M}.zip
 -- but there is no per-year file, only one ZIP PER MONTH.
 
-FULL-YEAR AGGREGATION (decided after a re-evaluation of the data-source
-approach): every delay/cancellation/taxi-out figure in this system used to
-come from a SINGLE MONTH (January) of the requested year, presented
-alongside labels like "2025" as if it represented the whole year. That
-understated what the number actually was. This connector now downloads and
-merges all 12 months of the requested year into one true annual aggregate.
+Every delay/cancellation/taxi-out figure is a full-year aggregate, not a
+single month presented under a year label: this connector downloads and
+merges all 12 months of the requested year before returning a result.
 
-COST: this is a real tradeoff, made deliberately. A cold year now costs
-~12x a single month's download (BTS monthly files run 10-30MB each, so up
-to ~300MB total for one year) instead of one ~20MB file. But it only
-happens ONCE per year, ever, for the life of the process -- the result is
-cached (data.cache.get_or_load, single-flight-protected) and every
-airport, comparison, and ranking for that year is then served from the
-in-memory aggregate with no further network cost. This mirrors exactly the
-existing resource-oriented caching already used for BTS T-100 and FAA TAF
-(whole-national-resource, cached once, shared by every caller) -- the year
-IS the resource here, not the month.
+COST: a real, deliberate tradeoff. A cold year costs roughly 12x a single
+month's download (BTS monthly files run 10-30MB each, so up to ~300MB
+total), instead of one ~20MB file. This happens once per year, ever, for
+the life of the process -- the result is cached (data.cache.get_or_load,
+single-flight-protected) and every airport, comparison, and ranking for
+that year is then served from the in-memory aggregate with no further
+network cost. This mirrors the resource-oriented caching used for BTS
+T-100 and FAA TAF (whole-national-resource, cached once, shared by every
+caller) -- the year is the resource here, not the month.
 
 Months are fetched CONCURRENTLY (a thread pool) rather than sequentially,
 so the wall-clock cost of a cold year is closer to "however long the

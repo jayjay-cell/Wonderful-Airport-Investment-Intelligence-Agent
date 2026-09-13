@@ -1,6 +1,6 @@
-// Faithful implementation of the Figma "aero-intel-desktop" welcome screen
-// (node 70:4), pulled via get_design_context — real icon assets, exact
-// colors/fonts/radii, not an approximation. See plan Section 5a.
+// Welcome content: brand mark, headline, and suggestion prompts. Rendered
+// full-screen on first launch, and inline (without the brand row, via
+// showBrand={false}) inside the app frame's empty conversation state.
 
 import planeIcon from "../assets/plane.svg";
 import barChart3Icon from "../assets/bar-chart-3.svg";

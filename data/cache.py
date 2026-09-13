@@ -1,8 +1,8 @@
 """Thread-safe in-memory cache with single-flight deduplication.
 
-Deliberately still a plain in-process dict (no DuckDB/Parquet/Redis/other
-infrastructure) — this is the minimum robust behavior needed, not a
-platform. Two properties beyond the original version:
+Deliberately a plain in-process dict (no Redis or other external cache) --
+this is the minimum robust behavior a single-process deployment needs, not
+a platform. Two properties beyond a plain dict:
 
 1. Thread-safe reads/writes (a lock around the store).
 2. Single-flight: if N threads request the same cold key concurrently,
@@ -11,9 +11,8 @@ platform. Two properties beyond the original version:
    8-airport ranking from triggering multiple simultaneous downloads of
    the identical national BTS/FAA file.
 
-TTL and no-stale-data behavior are unchanged: every entry has an expiry,
-and cache_get() returns None (a real miss) once expired — callers always
-re-fetch rather than serve stale data past its TTL.
+Every entry has an expiry, and cache_get() returns None (a real miss) once
+expired -- callers always re-fetch rather than serve stale data past TTL.
 """
 
 from __future__ import annotations

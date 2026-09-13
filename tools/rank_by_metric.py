@@ -1,4 +1,3 @@
-# ORIENTATION: TOOL. National/regional ranking by ONE metric (e.g. "largest airport by passengers"). Not the opportunity ranking.
 """rank_airports_by_metric: generic national/regional ranking by a single
 deterministic metric. Answers "which airport is largest" (by passengers),
 "which airport has the most annual passengers", etc. Does NOT replace

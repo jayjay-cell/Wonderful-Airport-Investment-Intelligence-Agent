@@ -1,8 +1,8 @@
-// Composer bar — matches Figma node 76:268 exactly: 64px attachment button,
-// nested translucent input pill containing a 64px mic button inside it, and
-// an 80px send button. Mic button now wired to real browser speech
-// recognition (see ../useVoiceInput.ts) -- click to dictate, transcript is
-// appended into the text field, not auto-sent.
+// Message composer: attachment button (disabled, not yet supported), a text
+// input with an inset mic button wired to real browser speech recognition
+// (see ../useVoiceInput.ts -- click to dictate, transcript is appended into
+// the field rather than auto-sent), and a send button. The `compact` prop
+// renders the smaller in-conversation variant used once a chat is active.
 
 import { KeyboardEvent, useState } from "react";
 import paperclipIcon from "../assets/paperclip.svg";

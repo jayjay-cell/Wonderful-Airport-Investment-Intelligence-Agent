@@ -1,6 +1,5 @@
-// Conversation sidebar — matches Figma node 88:2's "sidebar" (93:4): brand
-// mark, new-analysis button, a "Recent" list of past conversations, and a
-// user footer pinned to the bottom.
+// Conversation sidebar: brand mark, new-analysis button, a "Recent" list of
+// past conversations, and a user footer pinned to the bottom.
 
 import planeIcon from "../assets/plane.svg";
 import plusIcon from "../assets/plus.svg";

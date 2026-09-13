@@ -1,4 +1,3 @@
-# ORIENTATION: TOOL. Opportunity ranking within a region/state. Screens candidates by passenger volume, scores a shortlist.
 """rank_airports: resolves a region/state into candidate airports, screens
 them cheaply by passenger volume (already returned by find_airports -- no
 extra fetch), then computes opportunity_score() (core/scoring.py) for a
@@ -103,7 +102,10 @@ def rank_airports(region: str | None = None, state: str | None = None, investmen
             f"{len(all_candidates)} commercial-service airports match {discovery['candidate_set_description']}. "
             f"The top {len(shortlist_airports)} by passenger volume were fully profiled and scored. "
             f"This bounds response time for region-wide rankings -- a cost-scoping choice, not a claim "
-            f"that unscreened airports lack opportunity."
+            f"that unscreened airports lack opportunity. Separately, opportunity_score_coverage_ratio on "
+            f"each candidate shows how much of that candidate's own scoring data was actually available -- "
+            f"a top-ranked candidate with a low coverage_ratio rests on thinner data than one with full "
+            f"coverage, even at a similar score."
         ),
         "ranked_candidates": [
             {
@@ -111,6 +113,7 @@ def rank_airports(region: str | None = None, state: str | None = None, investmen
                 "opportunity_score": score.value,
                 "opportunity_score_basis": score.basis,
                 "opportunity_score_missing": score.missing,
+                "opportunity_score_coverage_ratio": score.coverage_ratio,
                 "limitations": score.limitations,
             }
             for p, score in top

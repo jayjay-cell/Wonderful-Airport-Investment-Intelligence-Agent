@@ -1,4 +1,3 @@
-# ORIENTATION: TOOL. Resolves a region/state name into a list of real commercial airports.
 """find_airports: resolves a region/state/city/name query into a list of
 candidate airport identities. Thin wiring over data/regions.py and
 data/clients/faa_airports.py -- no scoring logic.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import httpx
 
-from core.models import Airport, HubClass, SourceRecord
+from core.models import Airport, SourceRecord
 from data.cache import cache_get, cache_set
 from data.degradation import SourceUnavailable, with_retry
 from datetime import date

@@ -1,12 +1,11 @@
-# ORIENTATION: SHARED BUILDING BLOCK. Fetches every data source for one airport. Other tools call this directly (not through the LLM).
 """get_airport_profile: fetches and assembles a full profile for one
-airport from all 5 applicable data sources, with each field labeled
+airport from all five applicable data sources, with each field labeled
 direct/proxy/missing.
 
 Also exposed as a LangChain tool so the model can call it directly for a
-plain "what's the delay rate at SFO"-type question, but most of its real
-use is as a plain Python function other tools (compare_airports,
-rank_airports) call into.
+plain "what's the delay rate at SFO"-type question, but it is also called
+as a plain Python function by other tools (compare_airports, rank_airports)
+that need a full profile as an intermediate step.
 """
 
 from __future__ import annotations
@@ -19,7 +18,6 @@ from langchain_core.tools import tool
 from core.metrics import (
     as_metric_value,
     cagr,
-    latest_complete_year,
     load_factor as calc_load_factor,
     long_haul_share,
     passengers_per_departure as calc_ppd,
@@ -161,6 +159,7 @@ def get_airport_profile(airport_code: str, trend_years: int = 3, include_bts: bo
         lh_departures_share = long_haul_share(adapted_routes, threshold_miles=long_haul_threshold_miles, basis="departures")["percentage"]
         lh_passengers_share = long_haul_share(adapted_routes, threshold_miles=long_haul_threshold_miles, basis="passengers")["percentage"]
 
+    ontime_coverage_period = None
     if ontime_result is None:
         delay_rate_value = cancellation_rate_value = median_taxi = delay_causes = None
     elif isinstance(ontime_result, SourceUnavailable):
@@ -172,11 +171,29 @@ def get_airport_profile(airport_code: str, trend_years: int = 3, include_bts: bo
         median_taxi = ontime_result.get("median_taxi_out_minutes")
         delay_causes = ontime_result.get("delay_causes")
 
+        # Reflects what the connector actually retrieved, not an assumed
+        # full year -- a month that failed to download/parse is excluded
+        # from the aggregate (see data/clients/bts_on_time.py) and that gap
+        # must be visible in the metric's own coverage period, not silently
+        # presented as full-year data.
+        months_included = ontime_result.get("months_included") or []
+        months_failed = ontime_result.get("months_failed") or []
+        if len(months_included) == 12:
+            ontime_coverage_period = f"{end_year} (full year)"
+        elif months_included:
+            ontime_coverage_period = f"{end_year} (months {months_included}; missing {months_failed})"
+            limitations.append(
+                f"BTS On-Time Performance for {end_year} is missing months {months_failed} -- "
+                f"delay/cancellation/taxi-out figures reflect only {len(months_included)}/12 months."
+            )
+        else:
+            ontime_coverage_period = f"{end_year} (no months retrieved)"
+
     enp_meta = faa_enplanements.source_metadata()
     enp_source = _source("FAA Commercial Service Enplanements", enp_meta["coverage_period"])
     taf_source = _source("FAA Terminal Area Forecast (TAF)", f"forecast as of {enp_meta['coverage_period']}")
     t100_source = _source("BTS T-100 Segment", str(end_year)) if t100_result is not None and not isinstance(t100_result, SourceUnavailable) else None
-    ontime_source = _source("BTS Reporting Carrier On-Time Performance", f"{end_year}-01") if ontime_result is not None and not isinstance(ontime_result, SourceUnavailable) else None
+    ontime_source = _source("BTS Reporting Carrier On-Time Performance", ontime_coverage_period) if ontime_coverage_period else None
 
     if t100_source or ontime_source:
         limitations.append(
@@ -201,12 +218,12 @@ def get_airport_profile(airport_code: str, trend_years: int = 3, include_bts: bo
         faa_forecast_passenger_cagr=as_metric_value(forecast_cagr_value, Evidence.DIRECT if forecast_cagr_value is not None else Evidence.MISSING, unit="ratio", definition="FAA TAF forecast CAGR (multi-year), not observed demand", source=taf_source if forecast_cagr_value is not None else None),
         long_haul_share_departures=as_metric_value(
             lh_departures_share, Evidence.DIRECT if lh_departures_share is not None else Evidence.MISSING, unit="ratio",
-            definition=f"Share of scheduled passenger departures with great-circle distance >= {long_haul_threshold_miles:.0f} statute miles (cargo-only excluded).",
+            definition=f"Share of performed passenger departures with great-circle distance >= {long_haul_threshold_miles:.0f} statute miles (cargo-only excluded).",
             source=t100_source if lh_departures_share is not None else None,
         ),
         long_haul_share_passengers=as_metric_value(
             lh_passengers_share, Evidence.DIRECT if lh_passengers_share is not None else Evidence.MISSING, unit="ratio",
-            definition=f"Share of scheduled passengers on routes with great-circle distance >= {long_haul_threshold_miles:.0f} statute miles (cargo-only excluded).",
+            definition=f"Share of passengers carried on performed departures with great-circle distance >= {long_haul_threshold_miles:.0f} statute miles (cargo-only excluded).",
             source=t100_source if lh_passengers_share is not None else None,
         ),
         long_haul_threshold_miles=long_haul_threshold_miles,
@@ -228,13 +245,15 @@ def _serialize(result: dict) -> dict:
 def get_airport_profile_tool(airport_code: str, long_haul_threshold_miles: float = 1500) -> dict:
     """Get a structured profile for one airport: passenger/flight volumes,
     growth, load factor, delays, cancellations, FAA forecast, AND long-haul
-    share (both by departures and by passengers, at the given distance
-    threshold -- default 1500 statute miles, this system's configured
-    definition). Each field is labeled direct/proxy/missing. Use this for
-    any single-airport factual lookup, including "what % of flights from X
-    are long-haul" -- it is not a separate tool. For a single-airport
-    investment question ("is X a good investment", "unmet demand at X"),
-    also use this tool -- there is no dedicated scoring tool for one
-    airport; combine this with research_airport_facts_tool and explain the
-    answer yourself from the returned numbers."""
+    share (share of PERFORMED passenger departures -- i.e. flights that
+    actually operated, not scheduled/planned ones -- at the given distance
+    threshold, default 1500 statute miles, this system's configured
+    definition; cargo-only routes always excluded). Returned both by
+    departures and by passengers. Each field is labeled direct/proxy/missing.
+    Use this for any single-airport factual lookup, including "what % of
+    flights from X are long-haul" -- it is not a separate tool. For a
+    single-airport investment question ("is X a good investment", "unmet
+    demand at X"), also use this tool -- there is no dedicated scoring tool
+    for one airport; combine this with research_airport_facts_tool and
+    explain the answer yourself from the returned numbers."""
     return _serialize(get_airport_profile(airport_code, long_haul_threshold_miles=long_haul_threshold_miles))

@@ -1,4 +1,3 @@
-# ORIENTATION: In-memory conversation store, keyed by an unguessable session_id. Same pattern as NexaTel's app/main.py.
 """In-memory conversation store, keyed by session_id.
 
 Documented limitation: process-lifetime only, lost on restart, not

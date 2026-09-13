@@ -5,22 +5,23 @@ airports where modernization could unlock additional passenger or flight
 capacity, using live public FAA/BTS data and deterministic scoring — not
 LLM-invented numbers.
 
-See [DESIGN.md](DESIGN.md) for methodology, architecture, and tradeoffs.
+See [DESIGN.md](DESIGN.md) for architecture, methodology, and tradeoffs.
 
 ## Setup
 
 ### Requirements
 - Python 3.11+
 - Node.js 18+
-- At least one free-tier LLM API key: [Google AI Studio](https://aistudio.google.com/apikey) (Gemini),
-  [Groq](https://console.groq.com/keys), or [OpenRouter](https://openrouter.ai/keys)
+- At least one free-tier LLM API key: [Groq](https://console.groq.com/keys),
+  [Google AI Studio](https://aistudio.google.com/apikey) (Gemini), or
+  [OpenRouter](https://openrouter.ai/keys)
 
 ### 1. Backend
 
 ```bash
 python -m pip install -r requirements.txt
 cp .env.example .env
-# edit .env and add at least one of GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY
+# edit .env and add at least one of GROQ_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY
 ```
 
 ### 2. Frontend
@@ -44,8 +45,8 @@ Start the frontend (in a second terminal, from `ui/`):
 npm run dev
 ```
 
-Open the printed local URL (typically `http://localhost:5173`). The React
-dev server proxies `/api/*` to the FastAPI backend on port 8000.
+Open the printed local URL (typically `http://localhost:5173`). The Vite dev
+server proxies `/api/*` to the FastAPI backend on port 8000.
 
 Verify the backend is up directly:
 
@@ -54,214 +55,136 @@ curl http://127.0.0.1:8000/health
 # {"status":"ok"}
 ```
 
-## Architecture — a controlled plan-and-execute pipeline
+## Architecture
 
-This is **not** an unrestricted ReAct agent looping freely over many tools.
-The server, not the LLM, controls the flow:
+A LangGraph ReAct agent (`agent/graph.py`) with a fixed set of six tools. The
+full conversation history is replayed to the model on every turn — no
+summarization step to drift out of sync with what was actually said. The
+model calls whichever tools a question needs; every calculation the tools
+report is computed in deterministic Python (`core/`), never by the LLM
+itself.
 
 ```
 User message
     ↓
-FastAPI loads ConversationState (per session_id)
+FastAPI loads ConversationState (per session_id, in-memory)
     ↓
-Planner LLM  →  structured QueryPlan (Pydantic, never prose)
+LangGraph create_react_agent — full message history every turn
     ↓
-Python validates the plan  (≤1 structured repair attempt, never a loop)
+tools/ (6 tools)  →  core/ (pure calculation)  →  data/clients/ (live FAA/BTS)
     ↓
-Deterministic Executor runs 0–3 operations
-    ↓
-EvidenceBundle (the only thing the Answer LLM sees)
-    ↓
-Answer LLM writes the reply
-    ↓
-FastAPI saves the updated ConversationState
+Reply, saved back to ConversationState
 ```
 
-The Planner decides *what to fetch* and never computes a value. Python owns
-every calculation, classification and ranking. The Answer LLM explains the
-evidence and may never recalculate, reclassify, or invent a value or citation.
+See [DESIGN.md](DESIGN.md) for the full architecture, the two-score
+calculation model, and the provider-fallback design.
 
-### The eight operations
+### The six tools
 
-| Operation | Responsibility |
+| Tool | Responsibility |
 |---|---|
-| `resolve_airports` | codes / city / state / region → canonical identities |
-| `get_airport_metrics` | named metrics for named airports, each with unit, evidence type, source, actual coverage period |
-| `calculate_long_haul_share` | long-haul share by departures or passengers (cargo excluded) |
-| `compare_airports` | 2+ airports on consistent definitions, period mismatches flagged |
-| `rank_airports` | investment-opportunity ranking *or* single-metric ranking |
-| `assess_airport_opportunity` | the full deterministic Need/Pressure/Bottleneck/Fit/Actionability/Confidence methodology |
-| `find_nearby_airports` | great-circle distance from FAA coordinates |
-| `research_airport_facts` | official-source web research for facts FAA/BTS don't hold |
+| `find_airports_tool` | Resolve a region/state/city/name into candidate airports |
+| `get_airport_profile_tool` | Full metrics for one airport — demand, load factor, delays, long-haul share, FAA forecast |
+| `compare_airports_tool` | Side-by-side comparison for 2+ airports, with a computed congestion score |
+| `rank_airports_tool` | Opportunity ranking within a region, or single-metric ranking |
+| `find_nearby_airports_tool` | Computed great-circle distance between airports |
+| `research_airport_facts_tool` | Sourced web research for facts FAA/BTS don't hold |
 
-Maximum three operations per request.
-
-### Failure separation
-
-An **LLM** failure (timeout, rate limit, quota, transport) falls back to the
-next configured provider — independently for planning, plan repair, and
-answer generation. A **data-source** failure does *not* retry with another
-LLM: it becomes a structured `SourceFailure` in the Evidence Bundle, partial
-results are preserved, and the Answer LLM explains what is and isn't
-available. This replaces earlier behavior where a single failing BTS call
-could be re-executed once per provider.
+There is no dedicated single-airport "opportunity assessment" tool — a
+single-airport investment question is answered by the model composing
+`get_airport_profile_tool` with `research_airport_facts_tool` and explaining
+the result itself from the returned numbers.
 
 ## Example questions
-
-The four assignment examples are illustrative, not the boundary:
 
 - "Which airports in New England are strong candidates for terminal expansion?"
 - "Compare congestion at LAX and SNA"
 - "What percentage of flights out of Anchorage are long-haul?"
 - "What is the unmet flight demand at SFO airport and why?"
 
-It also handles, for example:
-
-- "Which airport is largest in the United States?" → defaults to annual
-  passengers and states that assumption rather than refusing
-- "How many terminals does JFK have?" → official-source research
-- "What does long-haul mean?" → answered directly, no BTS call
-- "Which airport is nearest to JFK?" → deterministic great-circle distance
-- "Which growing West Coast airports also have high delays?" → a
-  multi-operation analytical plan
+The agent isn't limited to a fixed airport list — any US commercial airport
+resolvable through FAA data works, since all five data sources are queried
+live rather than from a pre-baked snapshot.
 
 ### Conversational follow-ups
 
-Follow-ups resolve against real server-owned state (active airports, region,
-investment focus, last plan, last evidence, last failure) — not by re-reading
-prose:
+The full message history is available to the model on every turn, so
+follow-ups resolve naturally against what was actually said:
 
 ```
 Which airports in New England are strong terminal expansion candidates?
-What about just Boston?          → narrows scope, keeps the terminal focus
-Why is the first one better?     → reuses the saved ranking, no re-fetch
-Compare it with JFK.             → resolves "it" from active airports
-Are you sure?                    → reuses saved evidence, no re-fetch
+What about just Boston?          → narrows scope, same terminal focus
+Why is the first one better?     → explains from the prior answer
+Compare it with JFK.             → resolves "it" from the conversation
 ```
-
-If a turn fails, a following "What?" explains the saved failure rather than
-treating the message as a new out-of-scope question.
 
 ## A note on response time
 
-All analytical data is fetched **live** from official FAA/BTS sources — no
-pre-baked snapshots — so the first query that touches a given dataset pays
-real network cost:
+All analytical data is fetched live from official FAA/BTS sources — no
+pre-baked snapshots — so the first query that touches a given year/month
+pays real network cost. Two of the five sources are inherently slow: BTS
+T-100 has no public API (it's queried through a scripted government web
+form), and BTS On-Time Performance requires downloading and merging 12
+monthly files to build a full-year aggregate. Both are cached by the shared
+national resource (not per airport), so this cost is paid once per
+year/month, not once per airport or per question — a region-wide ranking of
+8 airports triggers one BTS download, not eight, and any later query for the
+same period is served from the in-memory cache in a couple of seconds.
 
-| Query type | Cold (first time) | Warm (cached in session) |
-|---|---|---|
-| Airport lookup / long-haul share | ~30–45s | ~2–10s |
-| Two-airport comparison | ~40–60s | ~8s |
-| Region-wide ranking | slowest path | much faster |
+## API
 
-Two of the five sources are inherently slow: BTS T-100 has no public API
-(it's queried through a scripted government web form), and BTS On-Time
-Performance is a 10–30MB monthly file. Both are **national** files, so the
-system downloads and parses each one *once* per period and serves every
-airport from that shared index — comparing two airports does not download
-the same file twice.
-
-Three pipeline properties bound the cost of a turn:
-
-- **At most 3 operations per request**, enforced in Python by the plan
-  validator — the LLM cannot decide to keep fetching.
-- **Follow-ups that reuse saved evidence make no data calls at all.** "Are
-  you sure?" and "why is the first one better?" answer from
-  `ConversationState.last_evidence`.
-- **A failed source is not retried per LLM provider.** It fails once, and
-  the answer says so.
-
-Region-wide rankings screen every candidate airport cheaply (FAA data only),
-then run the full BTS-backed assessment on a small configurable shortlist
-(default 3). The response states plainly that the deep assessment covered a
-shortlist — see DESIGN.md for why this tradeoff exists.
-
-## How to check what the agent actually did
-
-Every `/chat` response carries a `trace` reporting what really ran — so the
-agent's behavior can be verified directly instead of inferred from its prose.
-This matters because the failure that's hardest to catch is a *plausible*
-answer produced by the wrong operations, or by none at all.
-
-```bash
-curl -s -X POST http://127.0.0.1:8000/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"What percentage of ANC flights are long-haul?"}' | jq
-```
+### `POST /chat`
 
 ```json
-{
-  "session_id": "…",
-  "response": "About 13.8% of scheduled passenger departures…",
-  "trace": {
-    "question_type": "calculation",
-    "operations_run": ["calculate_long_haul_share"],
-    "airports": ["ANC"],
-    "reused_previous_evidence": false,
-    "assumptions": [],
-    "source_failures": [],
-    "plan_provider": "groq",
-    "answer_provider": "groq",
-    "plan_repaired": false,
-    "elapsed_seconds": 12.4
-  }
-}
+// Request
+{"session_id": "…" | null, "message": "What percentage of ANC flights are long-haul?"}
+
+// Response
+{"session_id": "…", "response": "About 17.7% of performed passenger departures…"}
 ```
 
-What to look for:
+Pass the returned `session_id` back on the next request to continue the same
+conversation. Omit it (or pass `null`) to start a new one.
 
-| Field | Tells you |
-|---|---|
-| `operations_run` | which operations really executed — **empty means none ran** |
-| `reused_previous_evidence` | `true` = answered from saved evidence, zero data calls |
-| `airports` / `region` | what scope the Planner resolved from your wording |
-| `assumptions` | any default it chose instead of asking you |
-| `source_failures` | which source failed, if the answer is hedged |
-| `plan_provider` / `answer_provider` | which LLM answered (differ ⇒ fallback happened) |
-| `plan_repaired` | the first plan failed validation and was repaired once |
+### `POST /chat/stream`
 
-Things worth checking by hand:
+Server-Sent Events variant of `/chat`, used by the UI for live tool-status
+updates. Emits a `session` event first, then zero or more `status` events as
+each tool actually runs (e.g. "Ranking candidates"), then one `done` event
+with the final answer (or `error` with a safe failure message).
 
-- **"What does long-haul mean?"** → `operations_run: []`, no BTS call.
-- **"Which airport is largest?"** → runs `rank_airports`, and `assumptions`
-  names the passenger-volume default rather than asking you.
-- **"How many terminals does JFK have?"** → `research_airport_facts`, not a
-  fabricated number.
-- **Any follow-up** ("are you sure?", "why is the first one better?") →
-  `reused_previous_evidence: true` and `operations_run: []`.
-- **"Get ice cream"** → `question_type: out_of_scope`, nothing runs.
+### `GET /health`
 
-To keep one conversation going, pass the returned `session_id` back on the
-next request.
+```json
+{"status": "ok"}
+```
 
 ## Project structure
 
 ```
 agent/
-  pipeline.py         orchestrates the flow; FastAPI's entry point
-  schemas.py          QueryPlan / EvidenceBundle / ConversationState / OperationResult
-  planner.py          Planner LLM → structured QueryPlan
-  plan_validator.py   deterministic plan validation (+ one repair attempt)
-  executor_engine.py  runs 0–3 operations, builds the EvidenceBundle
-  answer.py           Answer LLM — writes from the bundle only
-  llm_provider.py     provider chain (Groq → Gemini → OpenRouter)
-tools/                  the eight operations — one file each
-    __init__.py           the operation registry
-    find_airports.py      resolve_airports
-    airport_metrics.py    get_airport_metrics
-    long_haul.py          calculate_long_haul_share
-    compare_airports.py   compare_airports
-    rank_airports.py      rank_airports
-    assess_opportunity.py assess_airport_opportunity
-    nearby_airports.py    find_nearby_airports
-    research_facts.py     research_airport_facts
-    airport_profile.py    (shared profile builder — not an operation)
-    rank_by_metric.py     (single-metric path — called by rank_airports)
-api/                  FastAPI (POST /chat, GET /health) + ConversationState store
-core/                 Deterministic metrics/classification/ranking — no LLM, no I/O
-data/                 Live FAA/BTS connectors, cache, graceful degradation
-config/               methodology.yaml — every threshold, named and typed
-ui/                   React frontend (Vite)
+  graph.py      the ReAct agent loop, system prompt, streaming
+  providers.py  Groq -> Gemini -> OpenRouter fallback chain
+  state.py      per-conversation state (message history)
+api/
+  main.py           FastAPI: POST /chat, POST /chat/stream, GET /health
+  schemas.py        request/response models
+  session_store.py  in-memory session store
+core/                 deterministic calculation — no LLM, no I/O
+  models.py      typed domain models (Airport, AirportProfile, Score, ...)
+  metrics.py     raw metric formulas (CAGR, load factor, long-haul share, ...)
+  scoring.py     congestion_score() and opportunity_score() — the only two scores
+  ranking.py     opportunity-score-based ranking helpers
+data/                 live data fetching, caching, graceful degradation
+  clients/       one file per source — FAA Airports, FAA Enplanements, FAA TAF,
+                 BTS On-Time Performance, BTS T-100 Segment
+  cache.py       thread-safe in-memory cache with single-flight deduplication
+  degradation.py bounded retry + SourceUnavailable
+  regions.py     US region -> state code mapping
+tools/                the six LangChain-tool-decorated functions the agent calls
+config/
+  methodology.yaml   documented thresholds used by core/scoring.py
+ui/                   React + TypeScript + Vite frontend
 ```
 
 ## Configuration
@@ -270,37 +193,46 @@ At least one LLM provider key is required in `.env`:
 
 | Key | Used for | Required |
 |---|---|---|
-| `GROQ_API_KEY` | planning + answering (tried first) | one of the three |
-| `GEMINI_API_KEY` | planning + answering fallback, **and** all `research_airport_facts` (Google Search grounding) | required for research |
-| `OPENROUTER_API_KEY` | planning + answering fallback | optional |
+| `GROQ_API_KEY` | primary provider (tried first) | one of the three |
+| `GEMINI_API_KEY` | fallback provider, and required for `research_airport_facts_tool` (Google Search grounding) | required for research |
+| `OPENROUTER_API_KEY` | final fallback provider | optional |
 
-Without `GEMINI_API_KEY` the system still answers every structured question;
-research-dependent questions return an explicit limitation ("this needs
-information beyond FAA/BTS data and no research source is configured")
-rather than a refusal or an invented answer.
+Without `GEMINI_API_KEY`, every structured question still works; research
+questions return an explicit limitation instead of an answer.
 
 ## Known limitations
 
-- **Research evidence is narrative, not typed into scoring.** The Research
-  Agent returns citation-backed claims the Answer LLM relays with
-  attribution. It does not yet populate the typed
-  `core.models.ResearchEvidence` fields that would let `core/gates.py` turn
-  a documented legal cap or funded project into a hard gate — so
-  `Actionability` still defaults to `Unknown` in the deterministic
-  assessment. Deliberate: an unsourced or loosely-parsed claim must not
-  silently drive a deterministic classification.
 - **Conversation state is in-memory.** Lost on server restart, and not
   multi-instance safe. A real deployment would move the same
   `ConversationState` shape to Redis or a database keyed by `session_id`.
-- **BTS On-Time covers one month**, while FAA enplanements are annual. Each
-  metric now carries its own `source.coverage_period` and profiles emit an
-  explicit period-mismatch limitation, but the system does not yet aggregate
-  a full BTS year.
+- **Research findings do not feed scoring.** `research_airport_facts_tool`
+  returns sourced claims the model may relay with attribution, but nothing
+  in `core/scoring.py` consumes them — an unsourced claim must never
+  silently change a computed score.
+- **Period coverage differs by source.** FAA enplanements are annual; BTS
+  On-Time and T-100 are annual aggregates built from monthly files. Each
+  metric carries its own coverage period, and mismatches are flagged
+  explicitly rather than silently merged. If a BTS On-Time month fails to
+  download, that gap is named explicitly in the affected metric's coverage
+  period rather than silently presented as full-year data.
+- **A missing scoring input is dropped and the remaining weights are
+  renormalized**, not treated as zero — this keeps a score comparable
+  across candidates, but means two airports with very different amounts of
+  underlying data can land on similar-looking scores. Every score also
+  reports `coverage_ratio` (how many of its expected inputs were actually
+  available) for exactly this reason — a high score with a low
+  `coverage_ratio` rests on thinner data than the same score at 100%
+  coverage, and callers should treat both numbers together.
 - **`passenger_yoy_growth` is a one-year change**, not a multi-year CAGR —
-  named accordingly rather than overstated. FAA TAF forecast growth
-  (`faa_forecast_passenger_cagr`) *is* a genuine multi-year CAGR.
-- Classification thresholds are stated MVP assumptions pending validation
-  (see `config/methodology.yaml`).
-- Voice input is a visible but intentionally inert UI element for now.
+  named accordingly. FAA TAF forecast growth (`faa_forecast_passenger_cagr`)
+  is a genuine multi-year CAGR.
+- **The one hard limit on how many tool/model steps a turn can take is
+  LangGraph's `recursion_limit`** (configurable via `AGENT_MAX_STEPS`,
+  default 8 steps). Hitting it ends the turn with a safe fallback reply
+  rather than an unbounded loop.
+- Classification thresholds in `config/methodology.yaml` are stated MVP
+  defaults, not empirically validated.
+- Voice input transcribes speech into the composer via the browser's native
+  Web Speech API; it does not auto-send or read replies aloud.
 
 See [DESIGN.md](DESIGN.md) for methodology detail and tradeoffs.

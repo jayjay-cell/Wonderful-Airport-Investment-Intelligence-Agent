@@ -1,4 +1,3 @@
-# ORIENTATION: Request/response shapes for the HTTP boundary.
 """Request/response models for the FastAPI HTTP boundary."""
 
 from __future__ import annotations

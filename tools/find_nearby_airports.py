@@ -1,4 +1,3 @@
-# ORIENTATION: TOOL. "Which airport is nearest to X" -- real computed distance, never a remembered one.
 """find_nearby_airports: which airports are closest to a given one, with
 real computed distances. FAA publishes LAT_DECIMAL/LONG_DECIMAL for every
 airport, and distance is deterministic arithmetic on those coordinates --
@@ -11,7 +10,7 @@ import httpx
 from langchain_core.tools import tool
 
 from core.metrics import great_circle_distance_miles
-from data.cache import cache_status, get_or_load
+from data.cache import get_or_load
 from data.clients import faa_airports, faa_enplanements
 from data.degradation import SourceUnavailable
 from data.timing import timed

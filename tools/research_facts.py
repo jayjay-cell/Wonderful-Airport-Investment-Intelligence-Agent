@@ -1,4 +1,3 @@
-# ORIENTATION: TOOL. "How many terminals / what expansion projects" -- web research for facts FAA/BTS don't hold.
 """research_airport_facts: bounded, citation-required web research. Used
 ONLY when structured FAA/BTS data does not contain the information a
 question needs -- terminal/gate counts, expansion projects, capital plans,

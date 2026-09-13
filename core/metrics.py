@@ -86,8 +86,8 @@ def long_haul_share(
     basis: "departures" or "passengers"
 
     Returns numerator, denominator, percentage, and the definition used —
-    all of which must be surfaced in any answer, per methodology.yaml's
-    metric_definition tier.
+    all of which must be surfaced in any answer (see config/methodology.yaml
+    for the default threshold and basis).
     """
     if basis not in ("departures", "passengers"):
         raise ValueError(f"basis must be 'departures' or 'passengers', got {basis!r}")
