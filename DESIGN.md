@@ -136,9 +136,22 @@ provider failure — safe fallback reply, history untouched.
 | BTS On-Time Performance | 12 monthly ZIPs, merged annually | delays, cancellations, taxi-out |
 | BTS T-100 Segment | live scripted form submission, no public API | routes, long-haul share, load factor |
 
-The two nationwide sources (T-100, On-Time) are cached by the shared
-resource — year, not airport — so one download serves every airport asked
-about for that period.
+T-100, On-Time, and TAF are all cached by the shared resource — year (or
+release), not airport — so one download serves every airport asked about
+for that period. `api/main.py`'s `warm_cache` fires all three in a
+background thread on server startup (via FastAPI's `startup` event), so
+the first real question doesn't have to pay a cold-fetch cost that a
+question asked minutes earlier already paid. It runs in a thread pool
+executor rather than blocking the event loop, so `/health` and every route
+are reachable immediately regardless of how long warming takes; a question
+that arrives before warming finishes just does its own cold fetch, same as
+without the warm-up. Failures are logged and swallowed — a warm-up failure
+must never prevent the server from serving real traffic.
+
+This cache is process memory, not a file or external store: it survives a
+browser refresh (the frontend and backend are separate processes; reloading
+the page only restarts the former) but is cleared by restarting the
+`uvicorn` process itself.
 
 **Long-haul share**: share of *performed* passenger departures on routes
 ≥1,500 statute miles, cargo-only excluded. Two details that matter:
@@ -154,8 +167,13 @@ about for that period.
 ## Known limitations
 
 - Conversation state doesn't survive a restart, single-instance only.
-- Cold queries are slow (T-100's form + On-Time's 12-month download can run
-  30–90s combined); repeat queries for the same period hit cache.
+- Cold queries are slow (T-100's form + On-Time's 12-month download + TAF's
+  release ZIP can run from tens of seconds to a few minutes combined); a
+  startup warm-up (`api/main.py::warm_cache`) pre-fetches all three so this
+  is usually already paid by the time a real question arrives, but it is
+  a best-effort background task, not a guarantee — a question asked before
+  it finishes still pays the normal cold-fetch cost. Cache is in-process
+  memory: a browser refresh doesn't affect it; a backend restart does.
 - Thresholds in `config/methodology.yaml` are stated defaults, not backtested.
 - Sources cover different periods — flagged explicitly, not merged silently.
   A partial BTS month shows up in that metric's own coverage string rather

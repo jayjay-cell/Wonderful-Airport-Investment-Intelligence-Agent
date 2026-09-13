@@ -84,11 +84,25 @@ Compare it with JFK.           → resolves "it"
 
 Data is fetched at runtime from official FAA/BTS sources; no demo snapshot
 is bundled. The first query touching a given year pays real cost — BTS
-T-100 has no API (it's a scripted government form submission) and BTS
-On-Time means downloading and merging 12 monthly files. Both are cached by
-the shared national resource, not per airport, so this is paid once per
-year, not once per question. A cold query can take 30–90s; a repeat query
-for the same period is a couple of seconds.
+T-100 has no API (it's a scripted government form submission), BTS
+On-Time means downloading and merging 12 monthly files, and FAA TAF is a
+~15MB release ZIP. All three are cached by the shared resource (year, or
+release), not per airport, so this is paid once, not once per question or
+per airport. A cold query can take 30s to several minutes depending on
+which sources are still cold; a repeat query for the same period is a
+couple of seconds.
+
+The backend pre-fetches all three of these on startup, in the background
+(`api/main.py`'s `warm_cache`) — `/health` and the UI are reachable
+immediately, and this doesn't block or delay a real question, but it means
+the cache is usually already warm by the time you ask the first one.
+Warming takes a few minutes; give the backend a head start before a demo
+rather than asking a question the moment it starts. The cache lives in the
+backend process's memory: **refreshing the browser page does not restart
+the backend or clear it** — the frontend (Vite, port 5173) and backend
+(FastAPI, port 8000) are separate processes, and reloading the page only
+restarts the former. Only stopping/restarting the `uvicorn` process itself
+(or the machine) clears the warm cache and re-triggers the cold fetch.
 
 ## API
 
@@ -109,7 +123,7 @@ answer (or `error`).
 
 ```
 agent/    graph.py (agent loop + prompt), providers.py (Gemini→Groq→OpenRouter fallback), state.py
-api/      main.py (FastAPI), schemas.py, session_store.py (in-memory)
+api/      main.py (FastAPI + startup cache warm-up), schemas.py, session_store.py (in-memory)
 core/     models.py, metrics.py, scoring.py (the two scores), ranking.py — no LLM, no I/O
 data/     clients/ (5 FAA/BTS connectors), cache.py, degradation.py, regions.py
 tools/    the six agent tools
