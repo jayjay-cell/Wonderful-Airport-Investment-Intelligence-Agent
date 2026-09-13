@@ -7,7 +7,25 @@ HOW a number is computed, not whether it indicates a good investment.
 
 from __future__ import annotations
 
+from datetime import date
+
 from core.models import Evidence, MetricValue
+
+
+def latest_complete_year(today: date | None = None) -> int:
+    """FAA/BTS annual data for year Y is generally not complete/published
+    until well into Y+1. Conservatively treat last calendar year as the
+    latest complete year once we're at least 3 months into the current one,
+    otherwise the year before that."""
+    today = today or date.today()
+    if today.month >= 4:
+        return today.year - 1
+    return today.year - 2
+
+
+def trailing_years(n: int, today: date | None = None) -> list[int]:
+    end = latest_complete_year(today)
+    return list(range(end - n + 1, end + 1))
 
 
 def passenger_volume(passenger_records: list[float]) -> float:
@@ -138,13 +156,19 @@ def as_metric_value(
     unit: str | None = None,
     definition: str | None = None,
     note: str | None = None,
+    source=None,
 ) -> MetricValue:
     """Convenience wrapper so tools/ don't construct MetricValue by hand and
-    risk forgetting the evidence tag."""
+    risk forgetting the evidence tag. `source` (a core.models.SourceRecord)
+    should be passed whenever the caller knows the metric's ACTUAL coverage
+    period — e.g. FAA enplanements (annual, published with a lag) vs. BTS
+    On-Time (may already cover a later year/month) must never be conflated
+    into one shared period just because both live on the same profile."""
     return MetricValue(
         value=value,
         evidence=evidence if value is not None else Evidence.MISSING,
         unit=unit,
         definition=definition,
         note=note,
+        source=source,
     )

@@ -17,13 +17,13 @@ from core.models import ClassificationResult, Evidence, Level
 
 
 def classify_demand(
-    passenger_cagr: float | None,
+    passenger_yoy_growth: float | None,
     faa_forecast_cagr: float | None,
     config: dict,
 ) -> ClassificationResult:
     cfg = config["demand_level"]
 
-    if passenger_cagr is None and faa_forecast_cagr is None:
+    if passenger_yoy_growth is None and faa_forecast_cagr is None:
         return ClassificationResult(
             level=Level.INSUFFICIENT,
             evidence=Evidence.MISSING,
@@ -35,18 +35,18 @@ def classify_demand(
     is_high = False
     signals = []
 
-    if passenger_cagr is not None and passenger_cagr >= high["passenger_cagr_min"]:
+    if passenger_yoy_growth is not None and passenger_yoy_growth >= high["passenger_yoy_growth_min"]:
         is_high = True
-        signals.append(f"passenger CAGR {passenger_cagr:.1%} >= {high['passenger_cagr_min']:.1%}")
+        signals.append(f"passenger YoY growth {passenger_yoy_growth:.1%} >= {high['passenger_yoy_growth_min']:.1%}")
     elif (
-        passenger_cagr is not None
+        passenger_yoy_growth is not None
         and faa_forecast_cagr is not None
-        and passenger_cagr >= high["or_combined"]["passenger_cagr_min"]
+        and passenger_yoy_growth >= high["or_combined"]["passenger_yoy_growth_min"]
         and faa_forecast_cagr >= high["or_combined"]["faa_forecast_cagr_min"]
     ):
         is_high = True
         signals.append(
-            f"passenger CAGR {passenger_cagr:.1%} + FAA forecast CAGR "
+            f"passenger YoY growth {passenger_yoy_growth:.1%} + FAA forecast CAGR "
             f"{faa_forecast_cagr:.1%} both meet combined High thresholds"
         )
 
@@ -59,7 +59,7 @@ def classify_demand(
                       "meet the configured High-demand thresholds.",
         )
 
-    positive = (passenger_cagr is not None and passenger_cagr > 0) or (
+    positive = (passenger_yoy_growth is not None and passenger_yoy_growth > 0) or (
         faa_forecast_cagr is not None and faa_forecast_cagr > 0
     )
     if positive:
@@ -237,6 +237,15 @@ def classify_congestion(
 ) -> ClassificationResult:
     """Reuses the flight-side proxy signal set, applied identically across
     compared airports, rather than being an independently defined metric."""
+    if departure_delay_rate is None and median_taxi_out_minutes is None and cancellation_rate is None:
+        return ClassificationResult(
+            level=Level.INSUFFICIENT,
+            evidence=Evidence.MISSING,
+            reasoning="No delay-rate, taxi-out, or cancellation-rate data "
+                      "is available — congestion cannot be classified from "
+                      "missing data, and must not default to Low.",
+        )
+
     proxy = config["flight_side_pressure"]["proxy_signals"]
     signals: list[str] = []
 
@@ -251,7 +260,7 @@ def classify_congestion(
     level = Level.HIGH if n >= 2 else Level.MEDIUM if n == 1 else Level.LOW
     return ClassificationResult(
         level=level,
-        evidence=Evidence.PROXY if n > 0 else Evidence.DIRECT,
+        evidence=Evidence.PROXY,
         signals_triggered=signals,
         reasoning=f"{n} of 3 congestion signals triggered "
                   f"(same signal set as Flight-Side Pressure).",

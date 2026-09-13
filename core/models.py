@@ -200,7 +200,7 @@ class AirportProfile(BaseModel):
     period: str
 
     passengers: MetricValue | None = None
-    passenger_cagr: MetricValue | None = None
+    passenger_yoy_growth: MetricValue | None = None
     departures: MetricValue | None = None
     departure_cagr: MetricValue | None = None
     seats: MetricValue | None = None
@@ -211,6 +211,14 @@ class AirportProfile(BaseModel):
     median_taxi_out_minutes: MetricValue | None = None
     cancellation_rate: MetricValue | None = None
     delay_cause_breakdown: dict[str, float] | None = None
+
+    # Computed once here from the same T-100 route list already fetched for
+    # departures/passengers/seats above -- calculate_long_haul_share_tool
+    # was previously a SEPARATE tool re-deriving this from the same data.
+    # Folded in rather than duplicated (see tools/get_airport_profile.py).
+    long_haul_share_departures: MetricValue | None = None
+    long_haul_share_passengers: MetricValue | None = None
+    long_haul_threshold_miles: float | None = None
 
     faa_forecast_passenger_cagr: MetricValue | None = None
     faa_forecast_operations_cagr: MetricValue | None = None

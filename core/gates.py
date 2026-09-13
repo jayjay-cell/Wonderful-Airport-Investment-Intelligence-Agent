@@ -87,17 +87,17 @@ def evaluate_hard_gates(
 
 def evaluate_soft_flags(
     demand_level: Level,
-    passenger_cagr: float | None,
+    passenger_yoy_growth: float | None,
     research_evidence: list[ResearchEvidence],
     research_invoked: bool,
     unresolved_noncritical_conflict: bool,
 ) -> list[SoftFlag]:
     flags: list[SoftFlag] = []
 
-    if demand_level == Level.LOW and passenger_cagr is not None and passenger_cagr < 0:
+    if demand_level == Level.LOW and passenger_yoy_growth is not None and passenger_yoy_growth < 0:
         flags.append(SoftFlag(
             reason="sustained_demand_decline",
-            detail=f"Passenger CAGR is negative ({passenger_cagr:.1%}).",
+            detail=f"Passenger year-over-year growth is negative ({passenger_yoy_growth:.1%}).",
         ))
 
     opposition = [ev for ev in research_evidence

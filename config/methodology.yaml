@@ -79,9 +79,9 @@ demand_level:
     Classifies observed + forecast passenger growth into High/Medium/Low.
     Documented MVP assumption, not a validated industry cutoff.
   high:
-    passenger_cagr_min: 0.05
+    passenger_yoy_growth_min: 0.05
     or_combined:
-      passenger_cagr_min: 0.02
+      passenger_yoy_growth_min: 0.02
       faa_forecast_cagr_min: 0.03
   medium: >
     Historical or forecast demand is positive but does not satisfy the

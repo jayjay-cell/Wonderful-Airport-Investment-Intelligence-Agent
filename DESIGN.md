@@ -12,35 +12,73 @@ screening aid for further diligence, not a proven-ROI calculation. It is
 deliberately conservative about what it claims — see "What the system will not
 say" below.
 
-## Architecture
+## Architecture — plan-and-execute, not free-running ReAct
 
 ```
-React UI  →  FastAPI (/chat, /health)  →  LangChain agent (tool-calling)
-                                                  │
-                                    ┌─────────────┼──────────────┐
-                                    ▼             ▼              ▼
-                              agent/tools/   core/ (pure,   research/
-                              (wiring only)  deterministic)  (not built
-                                    │                         this pass)
-                                    ▼
-                              data/clients/ (FAA ×3, BTS ×2, live)
+React UI
+   │  POST /chat {session_id, message}
+   ▼
+FastAPI ── loads ConversationState (per session_id) ─────────────┐
+   │                                                             │
+   ▼                                                             │
+Planner LLM ──────────────→ QueryPlan (Pydantic structured output)│
+   │                                                             │
+   ▼                                                             │
+plan_validator.py (pure Python; ≤1 structured repair, no loop)   │
+   │                                                             │
+   ▼                                                             │
+executor_engine.py — runs 0–3 operations                         │
+   │         ┌──────────────┬───────────────┐                    │
+   ▼         ▼              ▼               ▼                    │
+tools/ (8 operations,  core/ (pure, deterministic —           │
+  incl. web research)   no LLM, no network)                     │
+   │                                                             │
+   ▼                                                             │
+data/clients/ (FAA ×3, BTS ×2, live)                             │
+   │                                                             │
+   ▼                                                             │
+EvidenceBundle ──→ Answer LLM ──→ reply ──→ saves state ─────────┘
 ```
+
+### Why this instead of a ReAct agent
+
+The previous build was a LangChain `create_agent` ReAct loop with 8 tools. It
+failed in three ways that were structural, not promptable:
+
+1. **Overlapping tools made selection unreliable.** `rank_airports` and
+   `rank_airports_by_metric` both answered "rank airports"; `find_airports`
+   and `get_airport_profile` duplicated work other tools did internally.
+2. **The loop was unbounded.** Nothing in Python limited how many tools ran.
+3. **Failure kinds were conflated.** Any exception anywhere in the loop —
+   including a BTS data-source timeout — retried the *entire graph* with the
+   next LLM provider, so one failing BTS call could execute three times for
+   one question.
+
+The plan-and-execute pipeline fixes each in code rather than in prose: the
+operations have non-overlapping responsibilities, the validator caps the plan
+at three operations, and a data-source failure is terminal for the turn
+(recorded as a `SourceFailure`) while only genuine LLM failures trigger
+provider fallback.
 
 **Layer boundaries are load-bearing, not decorative.** `core/` never imports
-LangChain and never touches the network — it is pure Python functions operating
-on typed Pydantic models. This is what makes "deterministic, not just LLM
-output" a checkable fact: every classification, gate, and ranking rule has a
-unit test that runs with zero network access and zero LLM calls (`tests/
-test_metrics.py`, `test_classifications.py`, `test_gates.py`, `test_ranking.py`,
-`test_conflicts.py` — 48 tests). `data/` fetches and validates but never
-interprets meaning. `agent/tools/` is the only layer allowed to import both
-`core/` and `data/` together.
+LangChain and never touches the network — pure Python functions on typed
+Pydantic models, runnable with zero network and zero LLM calls. That is what
+makes "deterministic, not just LLM output" a checkable property rather than a
+claim. `data/` fetches and validates but never interprets meaning.
+`tools/` is the only layer allowed to compose `core/`, `data/` and
+`tools/research_facts.py` together.
 
-The LLM's job is narrow by design: read the question, decide which of the 6
-tools to call and with what parameters, then explain the tool's structured
-result in plain language. It never invents a number, never computes a
-classification, and the system prompt (`agent/prompts.py`) explicitly forbids
-scope creep into non-aviation topics or instruction overrides from tool output.
+### What each LLM may and may not do
+
+| Stage | May | May never |
+|---|---|---|
+| **Planner** (`agent/planner.py`) | choose question type, scope, metrics, ≤3 operations, state assumptions, decide evidence reuse | compute a value, state a fact, answer the user |
+| **Answer** (`agent/answer.py`) | explain and combine the Evidence Bundle, choose format | recalculate, reclassify, invent a value, invent a citation |
+| **Research** (`tools/research_facts.py`) | search official sources, return sourced claims | rank, score, recommend, or feed unsourced claims into scoring |
+
+Python owns every calculation, classification, and ranking. Neither prompt
+carries routing logic that code could enforce instead — the validator, not the
+prompt, is what actually rejects a bad plan.
 
 ## Scoring methodology
 
@@ -116,7 +154,7 @@ the classification surface area to build, test, and defend.
    weather/airspace-dominant cause blocks "Strong candidate," but **never
    erases Need** — a high-need, gated airport correctly resolves to
    `High need, low actionability`, not silently dropped or misreported as
-   `Weak candidate`. This specific behavior has a dedicated unit test.
+   `Weak candidate`.
 6. **Confidence** (`core/confidence.py`) — reflects evidence *quality*
    (how many dimensions relied on proxies vs. direct evidence), explicitly
    **not** business attractiveness. A low-opportunity airport with excellent
@@ -148,61 +186,80 @@ actually evaluated (it never is, in this build).
 | Classify Demand/Pressure/Need/Bottleneck/Fit/Actionability/Confidence | Deterministic code (`core/`) |
 | Apply hard gates and soft flags | Deterministic code (`core/gates.py`) |
 | Rank candidates | Deterministic code (`core/ranking.py`) |
-| Explain the structured result in natural language | LLM |
-| Answer follow-up questions using conversation context | LLM (session history) |
+| Decide which operations to run | LLM (Planner) — but the plan is validated in Python before anything executes |
+| Explain the structured result in natural language | LLM (Answer) |
+| Resolve follow-up references ("it", "the first one") | LLM (Planner), against server-owned `ConversationState` |
+| Find facts FAA/BTS don't hold | LLM (Research) — sourced claims only, never fed into scoring |
 
-The LLM **never** sees raw, unprocessed external API responses — only the
-already-computed, already-classified structured tool output. This bounds
-hallucination risk to phrasing, not to fabricated numbers.
+The Answer LLM **never** sees raw, unprocessed external API responses — only
+the `EvidenceBundle`, containing already-computed, already-classified
+structured output. This bounds hallucination risk to phrasing, not to
+fabricated numbers.
 
 ### LLM provider fallback
 
 Three free-tier providers in one ordered chain (`agent/llm_provider.py`):
 **Groq** first (fast, reliable free tier), then **Gemini**, then
-**OpenRouter**. Only providers with a configured API key are included.
+**OpenRouter**. Only providers with a configured API key are included. Each
+client is built with a short explicit timeout (20s) and `max_retries=1`, so
+a rate-limited provider is abandoned in seconds rather than hanging.
 
-Each client is built with a short explicit timeout (20s) and
-`max_retries=1`, and `agent/executor.py` compiles one agent graph per
-provider and tries them in order — so a rate-limited or failing provider is
-abandoned in seconds and the next one answers, rather than the request
-hanging.
+Fallback runs **independently at each LLM stage** — planning, plan repair,
+and answer generation each loop over the chain themselves. This matters:
+if Groq rate-limits during answer generation, Gemini writes the answer from
+the *same* Evidence Bundle. Nothing the Executor already fetched is re-run.
 
-This replaced an earlier design that *described* task-complexity-based
-routing but never actually used the chain: `get_default_model()` returned
-only the first provider, and the SDK's own defaults (`max_retries=6`, no
-timeout) meant a single Gemini `429` could stall a request for minutes with
-no fallback. The tier scaffolding was removed rather than left in place,
-because unused routing code that implies behavior the system doesn't have is
-worse than no routing code.
+This replaced two earlier designs. The first *described* task-complexity
+routing but never used the chain (`get_default_model()` returned only the
+first provider, and SDK defaults of `max_retries=6` with no timeout meant a
+single Gemini `429` could stall for minutes). The second — the ReAct
+executor — did use the chain, but retried the whole graph on *any*
+exception, so a BTS failure was re-executed once per provider. The current
+design separates the two failure kinds explicitly.
 
-### Request routing (what the agent does with a question)
+### Failure taxonomy
 
-The system prompt (`agent/prompts.py`) routes each message to one of:
-clarification, deterministic tool call(s), reuse of prior context, a narrow
-direct answer (methodology/definitions only), explanation of a prior
-failure, or a polite decline.
+| Failure | Response |
+|---|---|
+| LLM timeout / rate limit / quota / transport | try next provider, record which providers were attempted and which succeeded |
+| FAA / BTS / research source failure | do **not** change LLM; preserve partial results; add a `SourceFailure` to the bundle; lower confidence; let the Answer LLM explain |
+| Operation raises unexpectedly | captured as `INTERNAL_ERROR` for that operation; the rest of the turn continues |
+| Internal / unrecoverable | structured error with a `request_id`; never a stack trace, key, or internal detail |
 
-This replaced a stricter "call exactly one tool or refuse" rule that
-produced brittle behavior in live use: questions without an exact tool match
-("which airport is largest?") were refused outright rather than clarified,
-and a confused follow-up ("what") after a failed turn was treated as a fresh
-out-of-scope message. Two firm constraints remain: the agent must never
-state an airport fact that didn't come from a tool, and must not repeat a
-substantively identical answer when the user pushes back.
+### Request routing
+
+The Planner assigns each message a `question_type`, and Python enforces what
+that type is allowed to do:
+
+| Type | Behavior |
+|---|---|
+| `definition` | answered directly from methodology — no data call |
+| `lookup` / `calculation` / `comparison` / `ranking` / `airport_opportunity` | deterministic operations |
+| `analytical` | multi-operation plan (≤3) |
+| `clarification_needed` | exactly one question, returned verbatim, no operations run |
+| `out_of_scope` | polite decline — only for genuinely non-aviation requests |
+
+Scope policy: **every question reasonably related to airports or aviation is
+accepted.** A question is not out of scope merely because no deterministic
+operation matches it — if structured data can't answer it, research can, and
+if neither can, the answer says so plainly. Minor ambiguity uses a stated
+default ("largest" → annual passengers, assumption stated) rather than a
+clarifying question; only ambiguity that would *materially* change the answer
+asks.
 
 ## What the system will not say
 
-Enforced by the system prompt and by construction of the classification
-labels themselves:
+Enforced by the Answer prompt and — more importantly — by construction of the
+classification labels themselves and by the fact that the Answer LLM only
+ever sees an already-computed Evidence Bundle:
 
 - No guaranteed profitability
 - No exact terminal/gate/runway capacity number when only a proxy exists
 - No precise "unmet flights" count unless a direct authoritative source
   provides one — the system returns a qualitative pressure signal instead
 - No equating high traffic volume with high congestion — these are always
-  reported as separate fields (see the LAX/SNA test: LAX has ~7x SNA's
-  passenger volume but the *same* "Low" congestion classification, and the
-  answer says so explicitly)
+  reported as separate fields (LAX has ~7x SNA's passenger volume but can
+  carry the *same* congestion classification, and the answer says so)
 - `Insufficient evidence` is always a valid, non-apologetic answer
 
 ## Data sources
@@ -298,34 +355,77 @@ example questions, and is applied and documented, not silently patched.
    and the result states plainly that the deep assessment covered a
    shortlist, so the scoping is visible rather than implied.
 
-6. **No Research Agent in this pass.** The original plan specified a bounded
-   Research Agent (LLM web search) to confirm bottleneck findings and surface
-   funding/feasibility context for the top-3 ranked candidates. It was not
-   built in this pass. Its absence is handled honestly, not silently: without
-   it, Actionability defaults to `Unknown` rather than being guessed, and
-   every affected result states "Research Agent was not invoked" as a
-   limitation. Investment Fit still computes from structured delay-cause
-   signals alone (`Likely`, not `Confirmed`, without research).
+6. **Research returns narrative evidence, not typed scoring inputs.** The
+   Research Agent (`tools/research_facts.py`, Gemini + Google Search grounding) is
+   now built and wired as the `research_airport_facts` operation. It answers
+   questions structured data can't — terminal/gate counts, expansion
+   projects, funding status, land area, documented capacity constraints —
+   and returns citation-backed claims the Answer LLM relays *with
+   attribution*, clearly separated from deterministic findings.
 
-7. **In-memory session store and cache.** Both are process-local dicts — no
-   database, no Redis. Documented limitation: state is lost on restart and
-   isn't shared across multiple server instances. Acceptable for a one-day,
-   single-instance deliverable; called out explicitly rather than left
-   implicit.
+   It deliberately does **not** feed `core/`'s classification path. Doing
+   that would require populating the typed
+   `core.models.ResearchEvidence` fields (`confirmed_bottleneck`,
+   `legal_capacity_cap`, `funding_status`...) that `core/gates.py` already
+   knows how to consume — and a loosely-parsed or weakly-sourced claim
+   silently flipping a hard gate is a worse failure than the current
+   conservative default. So `Actionability` still defaults to `Unknown` in
+   the deterministic assessment, and Investment Fit reaches `Likely` rather
+   than `Confirmed` without typed research. Closing that loop is the single
+   highest-value next step.
+
+   Retrieved web content is treated as untrusted data throughout: the
+   research prompt explicitly instructs the model to ignore instructions
+   embedded in search results, and nothing retrieved can alter application
+   behavior.
+
+7. **Server-owned conversation state, in memory.** `ConversationState`
+   (`agent/schemas.py`) holds messages, active airports/region/focus, the
+   last plan, the last Evidence Bundle, and structured failure context —
+   keyed by `session_id` in `api/session_store.py`. This is what makes
+   follow-ups work structurally rather than by re-reading prose: "are you
+   sure?" reuses `last_evidence` with no data call, and "what?" after a
+   failure explains `last_failure`.
+
+   Full structured results stay server-side; only compact text goes into
+   message history, and the Planner receives a *summary* of state rather
+   than raw findings. The store is a process-local dict — lost on restart,
+   not multi-instance safe. Acceptable for a one-day, single-instance
+   deliverable; a real deployment moves the same shape to Redis or a
+   database without changing anything above it.
 
 ## Known limitations (honest accounting)
 
-- Research Agent not built (see tradeoff 6) — Actionability/Investment Fit
-  for ranked candidates are structured-data-only.
-- Classification thresholds are unvalidated MVP defaults (see tradeoff 3).
+- **Research evidence is not typed into deterministic scoring** (see
+  tradeoff 6). Research findings are relayed with citations but do not
+  drive gates, so Actionability defaults to `Unknown` and Investment Fit
+  tops out at `Likely` in the deterministic assessment.
+- **Classification thresholds are unvalidated MVP defaults** (see
+  tradeoff 3).
+- **Period coverage differs by source.** FAA enplanements are annual
+  (currently CY2024); BTS On-Time is a single month; BTS T-100 is a year.
+  Each `MetricValue` now carries its own `source.coverage_period` and
+  profiles emit an explicit period-mismatch limitation, and
+  `compare_airports` flags when compared airports don't share a period —
+  but the system does not yet aggregate a bounded full-year BTS window.
+- **`passenger_yoy_growth` is a one-year change, not a multi-year CAGR.**
+  Renamed from `passenger_cagr` so the name matches the computation. FAA
+  TAF forecast growth (`faa_forecast_passenger_cagr`) *is* a genuine
+  multi-year CAGR and keeps that name.
 - A few small commercial-service airports show `Hub Class: Unknown` even
   after passing the FAA enplanement threshold — a handful of rows in the
   source FAA workbook have a blank hub-class cell; the system reports
   `Unknown` honestly rather than guessing.
-- Session/cache state does not survive a server restart.
+- **Conversation state does not survive a server restart** and is not
+  multi-instance safe (see tradeoff 7).
 - Voice input: the composer UI shows a microphone icon (matching the
   provided Figma design) but it is inert — explicitly deferred, not
   half-built.
-- Cold-query latency for region-wide rankings (many airports) is the
-  system's slowest path; not optimized further than the concurrency cap
-  described above within a one-day budget.
+- Cold-query latency for region-wide rankings is still the slowest path.
+  It is now bounded three ways (≤3 operations per request, a capped
+  shortlist for deep assessment, and evidence reuse on follow-ups), but a
+  cold region-wide ranking still pays real BTS download cost.
+- **The Planner is a single LLM call with no self-correction beyond one
+  structured repair.** If both the initial plan and the repair fail
+  validation, the system asks the user to rephrase rather than guessing —
+  a deliberate choice over an unbounded correction loop.

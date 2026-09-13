@@ -1,5 +1,6 @@
-"""FastAPI app — the real HTTP boundary. POST /chat, GET /health.
-The React UI (and any future UI) talks to this over HTTP only; it never
+# ORIENTATION: THE FRONT DOOR. Defines POST /chat, GET /health. Same shape as NexaTel's app/main.py.
+"""FastAPI app -- the real HTTP boundary. POST /chat, GET /health. The
+React UI (and any future UI) talks to this over HTTP only; it never
 imports the agent directly.
 """
 
@@ -9,19 +10,23 @@ import logging
 
 from dotenv import load_dotenv
 
-load_dotenv()  # populates os.environ from .env before any provider is built
+load_dotenv()  # must run before agent.providers.build_providers reads os.environ
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
-from fastapi import FastAPI, HTTPException
+import uuid
+
+from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from langchain_core.messages import AIMessage, HumanMessage
+from fastapi.responses import JSONResponse
 
-from api.schemas import ChatRequest, ChatResponse, build_structured_error
-from api.session_store import append_messages, get_history, new_session_id
-from core.timing import timed
+from api.schemas import ChatRequest, ChatResponse
+from api.session_store import get_state, new_session_id, save_state
 
-app = FastAPI(title="Aero Intel — Airport Investment Intelligence Agent")
+logger = logging.getLogger("api.main")
+
+app = FastAPI(title="Aero Intel -- Airport Investment Intelligence Agent")
 
 app.add_middleware(
     CORSMiddleware,
@@ -31,48 +36,49 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    request_id = str(uuid.uuid4())
+    return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST", "detail": "message is required.", "request_id": request_id})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    # Last-resort safety net: never let a raw stack trace or exception
+    # message reach the client. Logged server-side with the real
+    # exception; the client gets a generic, safe message + request_id.
+    request_id = str(uuid.uuid4())
+    logger.error("Unhandled exception, request_id=%s", request_id, exc_info=True)
+    return JSONResponse(status_code=500, content={"error": "INTERNAL_ERROR", "detail": "An unexpected error occurred.", "request_id": request_id})
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
 
 
 @app.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
-    from agent.executor import run_turn
+async def chat(request: ChatRequest) -> ChatResponse:
+    from agent.graph import run_turn
+
+    if not request.message or not request.message.strip():
+        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST", "detail": "message is required."})
 
     session_id = request.session_id or new_session_id()
-    history = get_history(session_id)
+    state = get_state(session_id)
 
-    with timed("chat.total_request", session_id=session_id[:8]):
-        try:
-            response_text = run_turn(request.message, history)
-        except Exception as exc:  # noqa: BLE001 - intentional: this is the
-            # top-level request boundary. A T-100 failure, a provider
-            # failure, or any unhandled exception inside a tool/graph must
-            # never crash the backend process or leave the frontend with a
-            # raw 500/connection-reset — it must always produce a clean
-            # structured error AND a written history turn so the next
-            # message ("what") has context about what just failed.
-            failure_summary = build_structured_error(exc)
-            logging.getLogger("api.main").warning(
-                "chat_turn_failed: error_code=%s source=%s request_id=%s",
-                failure_summary.error_code, failure_summary.source, failure_summary.request_id,
-            )
-            append_messages(session_id, [
-                HumanMessage(content=request.message),
-                AIMessage(content=(
-                    f"[SYSTEM NOTE — this turn failed, no answer was produced] "
-                    f"{failure_summary.message} (source: {failure_summary.source or 'unknown'})"
-                )),
-            ])
-            raise HTTPException(
-                status_code=503,
-                detail=failure_summary.model_dump(),
-            ) from exc
+    state = await run_turn(state, session_id, request.message.strip())
+    save_state(session_id, state)
 
-    append_messages(session_id, [
-        HumanMessage(content=request.message),
-        AIMessage(content=response_text),
-    ])
+    last_message = state["messages"][-1]
+    if isinstance(last_message, dict):
+        reply_text = last_message.get("content")
+    else:
+        reply_text = getattr(last_message, "content", None)
+    if isinstance(reply_text, list):
+        # Some providers (Gemini) return content as a list of blocks
+        # rather than a plain string.
+        reply_text = "".join(b.get("text", "") for b in reply_text if isinstance(b, dict))
+    reply_text = reply_text or ""
 
-    return ChatResponse(session_id=session_id, response=response_text)
+    return ChatResponse(session_id=session_id, response=reply_text)

@@ -13,7 +13,7 @@ _EVIDENCE_RANK = {Evidence.DIRECT: 1, Evidence.PROXY: 0, Evidence.MISSING: -1}
 
 def _terminal_expansion_key(
     a: OpportunityAssessment,
-    passenger_cagr: float,
+    passenger_yoy_growth: float,
     passenger_volume: float,
 ) -> tuple:
     return (
@@ -21,7 +21,7 @@ def _terminal_expansion_key(
         _LEVEL_RANK[a.passenger_side_pressure.level],
         _LEVEL_RANK[a.demand_level.level],
         _EVIDENCE_RANK[a.passenger_side_pressure.evidence],
-        passenger_cagr,
+        passenger_yoy_growth,
         passenger_volume,
     )
 
@@ -77,7 +77,7 @@ def rank_candidates(
     metrics_by_airport: dict[str, dict],
 ) -> list[OpportunityAssessment]:
     """metrics_by_airport maps airport code -> raw tie-break metric values
-    (passenger_cagr, passenger_volume, departure_delay_rate, departure_cagr,
+    (passenger_yoy_growth, passenger_volume, departure_delay_rate, departure_cagr,
     departure_volume, growth, volume) needed for the final tie-break tiers.
     Ranking is restricted to exactly the assessments passed in — callers
     are responsible for building the requested candidate set upstream.
@@ -86,7 +86,7 @@ def rank_candidates(
         m = metrics_by_airport.get(a.airport.code, {})
         if investment_focus == InvestmentFocus.TERMINAL:
             return _terminal_expansion_key(
-                a, m.get("passenger_cagr", 0.0), m.get("passenger_volume", 0.0)
+                a, m.get("passenger_yoy_growth", 0.0), m.get("passenger_volume", 0.0)
             )
         if investment_focus == InvestmentFocus.RUNWAY_AIRFIELD:
             return _runway_airfield_key(
