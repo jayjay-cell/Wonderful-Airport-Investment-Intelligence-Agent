@@ -18,10 +18,6 @@ _AIRPORTS_URL = (
     "https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/"
     "NTAD_Aviation_Facilities/FeatureServer/0/query"
 )
-_RUNWAYS_URL = (
-    "https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/"
-    "Runways_View/FeatureServer/0/query"
-)
 
 _TIMEOUT = 10.0
 
@@ -67,7 +63,6 @@ def get_airport_identity(airport_code: str) -> tuple[Airport, SourceRecord]:
         )
 
     attrs = features[0]["attributes"]
-    runway_count = _get_runway_count(code)
 
     airport = Airport(
         code=attrs["ARPT_ID"],
@@ -75,7 +70,6 @@ def get_airport_identity(airport_code: str) -> tuple[Airport, SourceRecord]:
         city=attrs["CITY"],
         state=attrs["STATE_CODE"],
         is_commercial=attrs.get("FACILITY_USE_CODE") == "PU",
-        runway_count=runway_count,
         latitude=attrs.get("LAT_DECIMAL"),
         longitude=attrs.get("LONG_DECIMAL"),
     )
@@ -87,18 +81,3 @@ def get_airport_identity(airport_code: str) -> tuple[Airport, SourceRecord]:
     )
     cache_set(cache_key, (airport, source))
     return airport, source
-
-
-def _get_runway_count(code: str) -> int | None:
-    try:
-        params = {
-            "where": f"ARPT_ID='{code}'",
-            "outFields": "RWY_ID",
-            "f": "json",
-        }
-        resp = httpx.get(_RUNWAYS_URL, params=params, timeout=_TIMEOUT)
-        resp.raise_for_status()
-        data = resp.json()
-        return len(data.get("features", []))
-    except Exception:
-        return None

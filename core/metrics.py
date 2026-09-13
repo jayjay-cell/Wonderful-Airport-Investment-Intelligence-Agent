@@ -107,21 +107,6 @@ def long_haul_share(
     }
 
 
-def disrupted_flight_count(delayed_flights: int, cancelled_flights: int) -> int:
-    """Sum of delayed + cancelled. Caller must ensure the two counts don't
-    double-count the same flight per the source dataset's semantics."""
-    return delayed_flights + cancelled_flights
-
-
-def departures_per_runway(annual_departures: float, active_runway_count: int) -> float | None:
-    """Descriptive context ONLY. Does not measure practical runway capacity
-    — runway configuration, crossing geometry, aircraft mix, weather, and
-    airspace all matter and are not captured here."""
-    if active_runway_count <= 0:
-        return None
-    return annual_departures / active_runway_count
-
-
 _EARTH_RADIUS_STATUTE_MILES = 3958.7613
 
 

@@ -84,7 +84,6 @@ class Airport(BaseModel):
     is_commercial: bool = True
     latitude: float | None = None
     longitude: float | None = None
-    runway_count: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -221,7 +220,6 @@ class AirportProfile(BaseModel):
     long_haul_threshold_miles: float | None = None
 
     faa_forecast_passenger_cagr: MetricValue | None = None
-    faa_forecast_operations_cagr: MetricValue | None = None
 
     terminal_utilization: MetricValue | None = None  # direct, rare
     runway_utilization: MetricValue | None = None  # direct, rare

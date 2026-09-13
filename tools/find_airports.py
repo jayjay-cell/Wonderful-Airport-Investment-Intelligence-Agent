@@ -11,7 +11,7 @@ from langchain_core.tools import tool
 
 from core.models import Airport, HubClass
 from data.clients import faa_enplanements
-from data.regions import resolve_region
+from data.regions import known_region_names, resolve_region
 
 _AIRPORTS_URL = (
     "https://services.arcgis.com/xOi1kZaI0eWDREZv/arcgis/rest/services/"
@@ -56,11 +56,11 @@ def find_airports(region: str | None = None, state: str | None = None, commercia
             }
         states = resolve_region(region)
         if states is None:
+            known = ", ".join(name.title() for name in known_region_names())
             return {
                 "error": "AMBIGUOUS_QUERY",
                 "detail": f"{region!r} is not a recognized region. Known regions: "
-                          f"New England, Mid-Atlantic, Midwest, South, Southwest, West, "
-                          f"Pacific. Try passing a specific state instead.",
+                          f"{known}. Try passing a specific state instead.",
             }
     elif state:
         states = [state.strip().upper()]

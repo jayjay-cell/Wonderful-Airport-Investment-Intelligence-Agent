@@ -76,14 +76,6 @@ def cache_status(key: str) -> str:
     return "hit" if cache_get(key) is not None else "miss"
 
 
-def cache_clear() -> None:
-    """Test-only helper."""
-    with _LOCK:
-        _STORE.clear()
-        _INFLIGHT.clear()
-        _INFLIGHT_RESULT.clear()
-
-
 def get_or_load(key: str, loader: Callable[[], T], ttl_seconds: float = DEFAULT_TTL_SECONDS) -> T:
     """Cache-or-compute with single-flight deduplication.
 
