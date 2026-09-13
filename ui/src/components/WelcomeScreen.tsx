@@ -45,7 +45,7 @@ export function WelcomeScreen({ onSelectSuggestion, showBrand = true }: WelcomeS
           Ask Aero Intel about airport demand, yields, and infrastructure moves.
         </p>
         <p className="welcome-subtext">
-          Start with a prompt, attach a report, or continue a recent airport analysis.
+          Start with a prompt or continue a recent airport analysis.
         </p>
       </div>
 

@@ -696,44 +696,18 @@ body {
   background: linear-gradient(to bottom, rgba(234, 247, 255, 0), rgba(234, 247, 255, 0.8));
 }
 
-.composer-zone-meta,
 .composer-zone .composer-area {
   width: 100%;
   max-width: 760px;
 }
 
-.composer-zone-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.composer-zone-badge {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--label-teal);
-  white-space: nowrap;
-}
-
-.composer-zone-badge-dot {
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  background: var(--accent);
-  flex-shrink: 0;
-}
-
 .composer-zone-disclaimer {
   margin: 0;
+  width: 100%;
+  max-width: 760px;
+  text-align: center;
   font-size: 11px;
   color: #94a3b8;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .composer--compact {

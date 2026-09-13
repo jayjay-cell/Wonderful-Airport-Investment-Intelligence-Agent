@@ -156,16 +156,6 @@ export default function App() {
             )}
 
             <div className="composer-zone">
-              <div className="composer-zone-meta">
-                <div className="composer-zone-badge">
-                  <span className="composer-zone-badge-dot" />
-                  <span>Aero Intel</span>
-                  <img src={chevronDownIcon} alt="" width={14} height={14} />
-                </div>
-                <p className="composer-zone-disclaimer">
-                  Aero Intel can make errors. Verify key data independently.
-                </p>
-              </div>
               <ChatComposer
                 onSend={handleSend}
                 disabled={sending}
@@ -174,6 +164,9 @@ export default function App() {
                   hasConversation ? "Ask a follow-up or start a new analysis..." : "Ask Aero Intel about airport demand, yields, or infrastructure moves..."
                 }
               />
+              <p className="composer-zone-disclaimer">
+                Aero Intel can make errors. Verify key data independently.
+              </p>
             </div>
           </div>
         </div>

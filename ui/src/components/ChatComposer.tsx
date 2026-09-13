@@ -1,11 +1,10 @@
-// Message composer: attachment button (disabled, not yet supported), a text
-// input with an inset mic button wired to real browser speech recognition
-// (see ../useVoiceInput.ts -- click to dictate, transcript is appended into
-// the field rather than auto-sent), and a send button. The `compact` prop
-// renders the smaller in-conversation variant used once a chat is active.
+// Message composer: a text input with an inset mic button wired to real
+// browser speech recognition (see ../useVoiceInput.ts -- click to dictate,
+// transcript is appended into the field rather than auto-sent), and a send
+// button. The `compact` prop renders the smaller in-conversation variant
+// used once a chat is active.
 
 import { KeyboardEvent, useState } from "react";
-import paperclipIcon from "../assets/paperclip.svg";
 import micIcon from "../assets/mic.svg";
 import arrowUpIcon from "../assets/arrow-up.svg";
 import { useVoiceInput } from "../useVoiceInput";
@@ -42,9 +41,6 @@ export function ChatComposer({ onSend, disabled, showLabel, compact, placeholder
     <div className="composer-area">
       {showLabel && <p className="composer-label">START A NEW ANALYSIS</p>}
       <div className={`composer${compact ? " composer--compact" : ""}`}>
-        <button className="composer-icon-btn" title="Attach a report (not yet supported)" disabled>
-          <img src={paperclipIcon} alt="" width={18} height={18} />
-        </button>
         <div className="composer-input-pill">
           <input
             type="text"
