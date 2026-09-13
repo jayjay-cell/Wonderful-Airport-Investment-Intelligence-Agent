@@ -5,6 +5,7 @@ imports the agent directly.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from dotenv import load_dotenv
@@ -34,6 +35,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def warm_cache() -> None:
+    """Pre-fetches the three slow shared-resource data sources on server
+    startup, in the background: BTS T-100, BTS On-Time Performance, and
+    FAA TAF. All three are cached as one shared resource (T-100/On-Time
+    keyed by year, TAF by release -- see data/cache.py), so every
+    airport/comparison/ranking question pays each cost exactly once
+    regardless of which airport is asked about first, or how many. A cold
+    fetch of any one of them can take from several seconds (TAF) to
+    several minutes (BTS On-Time downloads and parses 12 monthly files);
+    warming all three here means the first real user question doesn't
+    have to wait on any of them. (An earlier version of this warm-up
+    covered only T-100 and On-Time -- a still-cold TAF meant every profile
+    in a region-wide ranking queued behind one ~35s TAF fetch anyway.)
+
+    Runs in a thread (all three connectors are synchronous httpx calls)
+    and never blocks the server from accepting requests -- /health and the
+    UI are reachable immediately; a question asked before the warm-up
+    finishes just pays the normal cold-fetch cost once, same as today.
+    Failures are logged and swallowed: a warm-up failure must never crash
+    the server or block real traffic.
+    """
+    def _warm():
+        from core.metrics import latest_complete_year
+        from data.clients import bts_on_time, bts_t100, faa_taf
+
+        year = latest_complete_year()
+        try:
+            bts_t100.get_annual_routes("ATL", year)  # airport code is unused by the shared load; any valid one works
+            logger.info("cache warm-up: BTS T-100 %s ready", year)
+        except Exception as exc:
+            logger.warning("cache warm-up: BTS T-100 %s failed (%s)", year, exc)
+        try:
+            bts_on_time.get_on_time_records("ATL", year)
+            logger.info("cache warm-up: BTS On-Time %s ready", year)
+        except Exception as exc:
+            logger.warning("cache warm-up: BTS On-Time %s failed (%s)", year, exc)
+        try:
+            faa_taf.get_forecast_series("ATL")
+            logger.info("cache warm-up: FAA TAF ready")
+        except Exception as exc:
+            logger.warning("cache warm-up: FAA TAF failed (%s)", exc)
+
+    asyncio.get_event_loop().run_in_executor(None, _warm)
 
 
 @app.exception_handler(RequestValidationError)

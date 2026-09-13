@@ -14,8 +14,9 @@ interface SuggestionPrompt {
 
 const SUGGESTIONS: SuggestionPrompt[] = [
   { icon: barChart3Icon, text: "Which airports in New England are strong candidates for terminal expansion?" },
-  { icon: briefcaseIcon, text: "Compare congestion at LAX and SNA" },
-  { icon: usersIcon, text: "What percentage of flights from Anchorage are long-haul?" },
+  { icon: briefcaseIcon, text: "Compare LA and Santa Ana airport congestion levels." },
+  { icon: usersIcon, text: "What is the percentage of long haul flights out of Anchorage airport?" },
+  { icon: planeIcon, text: "What is the unmet flight demand in SFO airport and why?" },
 ];
 
 interface WelcomeScreenProps {

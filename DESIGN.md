@@ -19,12 +19,11 @@ React UI → POST /chat (or /chat/stream)
   → reply, state saved
 ```
 
-Plain ReAct loop, not a planner/executor split. The model reasons over the
-conversation, calls whatever tools the question needs, and writes the
-answer itself from what they return. `core/` never imports LangChain or
-touches the network — pure functions on Pydantic models, which is what
-makes "deterministic, not LLM output" checkable rather than a claim in a
-docstring.
+The model reasons over the conversation, calls whatever tools the question
+needs, and writes the answer itself from what they return. `core/` never
+imports LangChain or touches the network — pure functions on Pydantic
+models, which is what makes "deterministic, not LLM output" checkable
+rather than a claim in a docstring.
 
 | Who does what | |
 |---|---|
@@ -60,12 +59,6 @@ Two scores, both in `core/scoring.py`, both 0–100:
 
 A missing input drops out and the remaining weights renormalize to sum to
 1.0 — never coerced to zero. If every input is missing, the score is `None`.
-
-This replaced an earlier multi-stage pipeline (Demand → Pressure → Need →
-Bottleneck → Fit → Confidence → a label). Most of its later stages gated on
-research evidence nothing in the system ever populated, so those branches
-never actually fired. Two scores with a stated basis cover the same ground
-and are easier to check.
 
 **Coverage.** Renormalizing keeps scores comparable, but it also means two
 airports with very different amounts of underlying data can land on a

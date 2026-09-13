@@ -190,6 +190,14 @@ body {
   flex-shrink: 0;
 }
 
+/* Some icon assets (e.g. plane.svg, reused from the brand mark where it
+   sits on a solid cyan background) have a hardcoded dark stroke. Force
+   every suggestion icon to the same accent cyan regardless of source SVG,
+   so the four cards read as one consistent set. */
+.suggestion-icon img {
+  filter: brightness(0) saturate(100%) invert(70%) sepia(72%) saturate(1000%) hue-rotate(140deg) brightness(103%);
+}
+
 /* ---- App frame: sidebar + main, matching node 88:2 ---- */
 
 /* A real full-screen application view -- no rounded card, no shadow, no
