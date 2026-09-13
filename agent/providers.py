@@ -89,25 +89,10 @@ def _is_openrouter_unavailable(err: Exception) -> bool:
 
 
 def build_providers() -> list[ModelProvider]:
-    """Groq first (default -- fast, generous free tier), Gemini second,
-    OpenRouter third. Built lazily/fresh rather than at import time so a
-    missing API key only breaks the provider that's actually missing one."""
+    """Gemini first (default), Groq second, OpenRouter third. Built
+    lazily/fresh rather than at import time so a missing API key only
+    breaks the provider that's actually missing one."""
     providers = []
-
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if groq_key:
-        from langchain_groq import ChatGroq
-        providers.append(ModelProvider(
-            name="groq",
-            model=ChatGroq(
-                model="openai/gpt-oss-120b",
-                api_key=groq_key,
-                temperature=0,
-                timeout=_REQUEST_TIMEOUT_SECONDS,
-                max_retries=0,
-            ),
-            is_unavailable_error=_is_groq_unavailable,
-        ))
 
     gemini_key = os.environ.get("GEMINI_API_KEY")
     if gemini_key:
@@ -122,6 +107,21 @@ def build_providers() -> list[ModelProvider]:
                 max_retries=0,
             ),
             is_unavailable_error=_is_gemini_unavailable,
+        ))
+
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        from langchain_groq import ChatGroq
+        providers.append(ModelProvider(
+            name="groq",
+            model=ChatGroq(
+                model="openai/gpt-oss-120b",
+                api_key=groq_key,
+                temperature=0,
+                timeout=_REQUEST_TIMEOUT_SECONDS,
+                max_retries=0,
+            ),
+            is_unavailable_error=_is_groq_unavailable,
         ))
 
     openrouter_key = os.environ.get("OPENROUTER_API_KEY")

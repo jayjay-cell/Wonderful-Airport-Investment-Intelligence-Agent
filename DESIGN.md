@@ -97,7 +97,7 @@ inventing a new label or score isn't.
 
 ## LLM fallback
 
-Groq → Gemini → OpenRouter, in that order, only configured providers
+Gemini → Groq → OpenRouter, in that order, only configured providers
 included. 20s timeout, no SDK retries — a rate-limited provider is dropped
 in seconds, not retried into the same wall. A recognized "unavailable"
 error (rate limit, quota, timeout, including OpenRouter's HTTP-200-with-

@@ -108,7 +108,7 @@ answer (or `error`).
 ## Layout
 
 ```
-agent/    graph.py (agent loop + prompt), providers.py (Groq→Gemini→OpenRouter fallback), state.py
+agent/    graph.py (agent loop + prompt), providers.py (Gemini→Groq→OpenRouter fallback), state.py
 api/      main.py (FastAPI), schemas.py, session_store.py (in-memory)
 core/     models.py, metrics.py, scoring.py (the two scores), ranking.py — no LLM, no I/O
 data/     clients/ (5 FAA/BTS connectors), cache.py, degradation.py, regions.py
@@ -119,8 +119,8 @@ ui/       React + TypeScript + Vite
 
 ## Config
 
-`GROQ_API_KEY` (tried first), `GEMINI_API_KEY` (fallback, also needed for
-research), `OPENROUTER_API_KEY` (last fallback). One is required. Without
+`GEMINI_API_KEY` (tried first, also needed for research), `GROQ_API_KEY`
+(fallback), `OPENROUTER_API_KEY` (last fallback). One is required. Without
 Gemini, research questions return a stated limitation instead of an answer.
 
 ## Limitations
