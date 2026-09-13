@@ -66,19 +66,32 @@ after a regional ranking) within the same session.
 
 ## A note on response time
 
-First-time queries about a new airport can take 30–110 seconds — this is
-real network time against live FAA/BTS sources (one source, BTS T-100, has no
-public API and is queried via a scripted form submission; another involves a
-10–30MB monthly file download). Repeat queries about the same airport within
-a session hit an in-memory cache and return in a few seconds. Region-wide
-ranking queries (e.g. "all of New England," ~20+ airports) are the slowest
-path since they assess every candidate airport — this is documented as a
-known tradeoff in DESIGN.md, not an oversight.
+All analytical data is fetched **live** from official FAA/BTS sources — no
+pre-baked snapshots — so the first query that touches a given dataset pays
+real network cost:
+
+| Query type | Cold (first time) | Warm (cached in session) |
+|---|---|---|
+| Airport lookup / long-haul share | ~30–45s | ~2–10s |
+| Two-airport comparison | ~40–60s | ~8s |
+| Region-wide ranking | slowest path | much faster |
+
+Two of the five sources are inherently slow: BTS T-100 has no public API
+(it's queried through a scripted government web form), and BTS On-Time
+Performance is a 10–30MB monthly file. Both are **national** files, so the
+system downloads and parses each one *once* per period and serves every
+airport from that shared index — comparing two airports does not download
+the same file twice.
+
+Region-wide rankings screen every candidate airport cheaply (FAA data only),
+then run the full BTS-backed assessment on a small configurable shortlist
+(default 3). The response states plainly that the deep assessment covered a
+shortlist — see DESIGN.md for why this tradeoff exists.
 
 ## Tests
 
 ```bash
-# Fast, no network — the deterministic core (48 tests)
+# Fast, no network — the deterministic core + agent behavior (83 tests)
 python -m pytest tests/ -m "not live"
 
 # Full suite including live integration tests against real FAA/BTS data

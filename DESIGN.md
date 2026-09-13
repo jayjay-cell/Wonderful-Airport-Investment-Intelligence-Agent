@@ -142,7 +142,7 @@ actually evaluated (it never is, in this build).
 | Task | Who does it |
 |---|---|
 | Understand the question, extract airport/region/investment focus/period | LLM |
-| Decide which of the 6 tools to call | LLM |
+| Decide which tool(s) to call, or ask a clarifying question | LLM |
 | Fetch data from FAA/BTS | Deterministic code (`data/`) |
 | Compute metrics (CAGR, load factor, long-haul share, delay rate...) | Deterministic code (`core/metrics.py`) |
 | Classify Demand/Pressure/Need/Bottleneck/Fit/Actionability/Confidence | Deterministic code (`core/`) |
@@ -155,15 +155,40 @@ The LLM **never** sees raw, unprocessed external API responses — only the
 already-computed, already-classified structured tool output. This bounds
 hallucination risk to phrasing, not to fabricated numbers.
 
-### LLM provider routing
+### LLM provider fallback
 
-Three free-tier providers (Gemini, Groq, OpenRouter) behind one
-`LLMProvider`/router interface (`agent/llm_provider.py`), routed by task
-complexity: simple lookup/comparison tools default to a fast model (Groq),
-complex reasoning/ranking tools default to a stronger model (Gemini), with
-fallback through the remaining providers on failure. Both the Main Agent and
-(if built) a Research Agent share this same router — one place to configure
-keys and routing order.
+Three free-tier providers in one ordered chain (`agent/llm_provider.py`):
+**Groq** first (fast, reliable free tier), then **Gemini**, then
+**OpenRouter**. Only providers with a configured API key are included.
+
+Each client is built with a short explicit timeout (20s) and
+`max_retries=1`, and `agent/executor.py` compiles one agent graph per
+provider and tries them in order — so a rate-limited or failing provider is
+abandoned in seconds and the next one answers, rather than the request
+hanging.
+
+This replaced an earlier design that *described* task-complexity-based
+routing but never actually used the chain: `get_default_model()` returned
+only the first provider, and the SDK's own defaults (`max_retries=6`, no
+timeout) meant a single Gemini `429` could stall a request for minutes with
+no fallback. The tier scaffolding was removed rather than left in place,
+because unused routing code that implies behavior the system doesn't have is
+worse than no routing code.
+
+### Request routing (what the agent does with a question)
+
+The system prompt (`agent/prompts.py`) routes each message to one of:
+clarification, deterministic tool call(s), reuse of prior context, a narrow
+direct answer (methodology/definitions only), explanation of a prior
+failure, or a polite decline.
+
+This replaced a stricter "call exactly one tool or refuse" rule that
+produced brittle behavior in live use: questions without an exact tool match
+("which airport is largest?") were refused outright rather than clarified,
+and a confused follow-up ("what") after a failed turn was treated as a fresh
+out-of-scope message. Two firm constraints remain: the agent must never
+state an airport fact that didn't come from a tool, and must not repeat a
+substantively identical answer when the user pushes back.
 
 ## What the system will not say
 
@@ -240,18 +265,38 @@ example questions, and is applied and documented, not silently patched.
    higher engineering risk than the others — documented as such rather than
    hidden.
 
-5. **Sequential-looking simplicity vs. concurrency.** The first working
-   version of the data-fetch pipeline fetched an airport's 5 data sources one
-   at a time; a two-airport comparison took 2–4 minutes. This was found
-   during testing (not assumed away) and fixed with a thread pool at three
-   levels — within one airport profile, across compared airports, and across
-   ranked candidates — bringing a cold two-airport comparison to ~100 seconds
-   (bounded by the slowest single source, mostly BTS) and a cached repeat to
-   ~8 seconds. Region-wide rankings (e.g. all of New England, 23 airports)
-   remain the slowest path in the system, gated by a concurrency cap
-   (`_MAX_CONCURRENT_ASSESSMENTS = 8`) chosen to balance speed against the
-   real risk of BTS rate-limiting or connection resets under heavy parallel
-   load.
+5. **Live data vs. response latency — three successive fixes.** The first
+   working pipeline was badly slow (a two-airport comparison took 2–4
+   minutes; a region-wide ranking could exceed 5 minutes). Three distinct
+   root causes were found by measurement, not assumption, and fixed in turn:
+
+   a. **Sequential fetching.** Each airport's 5 sources were fetched one at
+      a time. Fixed with thread pools at three levels — within a profile,
+      across compared airports, and across ranked candidates.
+
+   b. **Per-airport caching of national files (the big one).** BTS On-Time
+      and T-100 are *nationwide* files — one download contains every
+      airport — but the cache key was per-airport, so comparing LAX and SNA
+      downloaded the same national file twice, and an 8-airport ranking
+      downloaded it eight times. Re-keyed the cache by the actual resource
+      (`year/month`), parse once into an airport-indexed structure, and
+      added single-flight deduplication in `data/cache.py` so concurrent
+      cold requests for the same resource share one download instead of
+      racing. FAA TAF had the same bug in miniature — passenger and
+      operations forecasts each downloaded the same 15MB zip — now one
+      shared load. For On-Time, aggregation happens at parse time so the
+      cache holds per-airport metrics rather than millions of flight rows.
+
+   c. **Retry math.** Timeouts of 90–120s combined with 2–3 retries meant a
+      single unresponsive source could block a request for up to six
+      minutes. Now bounded per source (typically 20s, 0–1 retries) so a
+      dead source fails fast and is reported, rather than hanging.
+
+   Region-wide rankings remain the slowest path and are deliberately
+   bounded: every candidate is screened cheaply (FAA-only), but only a
+   configurable shortlist (default 3) gets the full BTS-backed assessment —
+   and the result states plainly that the deep assessment covered a
+   shortlist, so the scoping is visible rather than implied.
 
 6. **No Research Agent in this pass.** The original plan specified a bounded
    Research Agent (LLM web search) to confirm bottleneck findings and surface

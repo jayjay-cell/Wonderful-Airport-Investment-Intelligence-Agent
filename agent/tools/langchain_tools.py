@@ -94,6 +94,27 @@ def rank_airports(
 
 
 @tool
+def find_nearby_airports(airport_code: str, limit: int = 5, commercial_only: bool = True) -> str:
+    """Find the airports geographically closest to a given airport, with
+    real calculated great-circle distances in statute miles. Use this for
+    any question about which airports are near/nearest to another, how far
+    apart two airports are, or what alternatives serve the same area.
+    Distances are computed from FAA-published coordinates — always use this
+    tool rather than stating a distance from memory.
+
+    IMPORTANT: results include every FAA commercial-service airport in
+    range, and FAA's threshold is only 2,500 annual passengers — so small
+    facilities (seaplane bases, regional fields) appear alongside major
+    hubs. Each result carries annual_enplanements and hub_class. When
+    presenting these, make the size difference visible to the user (e.g.
+    note which are major hubs vs. very small facilities) rather than
+    listing them as if they were equivalent options."""
+    from agent.tools.nearby_airports import find_nearby_airports as _impl
+    result = _impl(airport_code, limit=limit, commercial_only=commercial_only)
+    return json.dumps(_serialize(result), default=str)
+
+
+@tool
 def rank_airports_by_metric(
     metric: str,
     region: str = "",
@@ -143,5 +164,6 @@ ALL_TOOLS = [
     compare_airports,
     rank_airports,
     rank_airports_by_metric,
+    find_nearby_airports,
     assess_airport_opportunity,
 ]

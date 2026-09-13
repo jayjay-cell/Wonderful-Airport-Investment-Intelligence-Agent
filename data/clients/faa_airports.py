@@ -40,7 +40,10 @@ def get_airport_identity(airport_code: str) -> tuple[Airport, SourceRecord]:
     def _fetch():
         params = {
             "where": f"ARPT_ID='{code}'",
-            "outFields": "ARPT_ID,ARPT_NAME,CITY,STATE_CODE,OWNERSHIP_TYPE_CODE,FACILITY_USE_CODE",
+            "outFields": (
+                "ARPT_ID,ARPT_NAME,CITY,STATE_CODE,OWNERSHIP_TYPE_CODE,"
+                "FACILITY_USE_CODE,LAT_DECIMAL,LONG_DECIMAL"
+            ),
             "f": "json",
         }
         resp = httpx.get(_AIRPORTS_URL, params=params, timeout=_TIMEOUT)
@@ -73,6 +76,8 @@ def get_airport_identity(airport_code: str) -> tuple[Airport, SourceRecord]:
         state=attrs["STATE_CODE"],
         is_commercial=attrs.get("FACILITY_USE_CODE") == "PU",
         runway_count=runway_count,
+        latitude=attrs.get("LAT_DECIMAL"),
+        longitude=attrs.get("LONG_DECIMAL"),
     )
     source = SourceRecord(
         source_name="FAA Airports and Runways (ArcGIS NTAD_Aviation_Facilities)",

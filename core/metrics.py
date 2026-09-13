@@ -104,6 +104,34 @@ def departures_per_runway(annual_departures: float, active_runway_count: int) ->
     return annual_departures / active_runway_count
 
 
+_EARTH_RADIUS_STATUTE_MILES = 3958.7613
+
+
+def great_circle_distance_miles(
+    lat1: float, lon1: float, lat2: float, lon2: float
+) -> float:
+    """Great-circle (haversine) distance in statute miles between two
+    coordinates. Deterministic arithmetic on FAA-published airport
+    coordinates — not a remembered fact. Used for "how far apart are these
+    airports" / "what's nearest to X" questions so the agent computes the
+    answer rather than recalling (and potentially inventing) a number.
+
+    Note: this is straight-line distance between airport reference points,
+    not driving distance.
+    """
+    import math
+
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    d_phi = math.radians(lat2 - lat1)
+    d_lambda = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(d_phi / 2) ** 2
+        + math.cos(phi1) * math.cos(phi2) * math.sin(d_lambda / 2) ** 2
+    )
+    return 2 * _EARTH_RADIUS_STATUTE_MILES * math.asin(math.sqrt(a))
+
+
 def as_metric_value(
     value: float | int | None,
     evidence: Evidence,
