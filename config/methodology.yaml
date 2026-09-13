@@ -1,0 +1,225 @@
+# Airport Modernization Opportunity Assessment — methodology configuration
+#
+# Every threshold below is an MVP default, not an empirically validated
+# aviation-industry standard. None have been backtested against real traffic
+# data at time of writing. They are grouped into three kinds with different
+# evidentiary weight — see threshold_kinds below before using any value in
+# code or in an explanation to the user.
+#
+# After live data access works, run a lightweight sanity check across a
+# small, diverse set of airports (large/medium/small hub) to confirm these
+# defaults produce meaningful variation rather than classifying nearly every
+# airport identically. Adjust only the values here if needed, and record the
+# change in this file's changelog at the bottom.
+
+threshold_kinds:
+  metric_definition: >
+    Defines HOW a calculation is performed (e.g. what counts as "long-haul").
+    Does not by itself imply an airport is a good or bad investment
+    candidate. Must be returned alongside any answer that uses it, and is
+    user-overridable per query (e.g. "use 2,000 miles instead").
+  descriptive_classification: >
+    Buckets an already-calculated metric into High/Medium/Low for the MVP
+    (e.g. what passenger growth rate counts as "High demand"). A documented,
+    configurable assumption — not a validated cutoff. Always labeled as such
+    when shown to the user.
+  proxy_signal: >
+    An indirect signal used only in combination with others because no
+    direct capacity measurement is available. A single proxy signal must
+    NEVER independently prove a bottleneck (terminal, gate, or runway) or
+    drive an investment recommendation on its own. Proxy-derived
+    classifications are always labeled "proxy" and lower Confidence.
+
+# ---------------------------------------------------------------------------
+# 1. Metric-definition defaults
+# ---------------------------------------------------------------------------
+metric_definitions:
+  long_haul_threshold_miles:
+    value: 1500
+    kind: metric_definition
+    description: >
+      Minimum great-circle distance (statute miles) for a route to count as
+      "long-haul". Purely definitional — does not indicate demand or
+      pressure. User-overridable per query.
+    user_overridable: true
+
+  long_haul_basis_default:
+    value: departures
+    kind: metric_definition
+    allowed_values: [departures, passengers]
+    description: >
+      Default weighting basis for long-haul share: share of scheduled
+      passenger departures (default) vs. share of passengers. User may
+      request the other basis explicitly.
+    user_overridable: true
+
+  trend_period_years:
+    value: 3
+    kind: metric_definition
+    description: >
+      Trailing complete years used for CAGR (Compound Annual Growth Rate)
+      calculations (passenger growth, departure growth). Definitional
+      choice of analysis window, not a pressure judgment.
+    user_overridable: true
+
+  operational_performance_window:
+    value: trailing_12_complete_months
+    kind: metric_definition
+    description: >
+      Window used for delay/cancellation/taxi-time metrics: the latest
+      complete trailing 12 months available in the data source.
+    user_overridable: false
+
+# ---------------------------------------------------------------------------
+# 2. Descriptive classification assumptions
+# ---------------------------------------------------------------------------
+demand_level:
+  kind: descriptive_classification
+  description: >
+    Classifies observed + forecast passenger growth into High/Medium/Low.
+    Documented MVP assumption, not a validated industry cutoff.
+  high:
+    passenger_cagr_min: 0.05
+    or_combined:
+      passenger_cagr_min: 0.02
+      faa_forecast_cagr_min: 0.03
+  medium: >
+    Historical or forecast demand is positive but does not satisfy the
+    High thresholds above.
+  low: >
+    Neither historical nor forecast demand is positive, or there is
+    sustained decline.
+  insufficient: >
+    Required time-series coverage (trend_period_years of history, or
+    forecast data) is missing.
+  note: >
+    Absolute passenger/departure volume is shown separately as "opportunity
+    size" context. High volume alone is never treated as evidence of
+    capacity pressure — pressure is judged by the Passenger-Side and
+    Flight-Side Pressure classifications below, not by Demand Level.
+
+# ---------------------------------------------------------------------------
+# 3. Proxy-signal thresholds
+# ---------------------------------------------------------------------------
+# IMPORTANT: each proxy below is one signal among several. A classification
+# built from proxies is always labeled "proxy" (not "direct"), and no single
+# signal here may independently produce a bottleneck finding or investment
+# recommendation. See core/classifications.py's combination logic.
+
+passenger_side_pressure:
+  kind: proxy_signal
+  description: >
+    Passenger-side (terminal/landside) capacity pressure. Prefer DIRECT
+    evidence (terminal design capacity/utilization from an authoritative
+    source) when available — only fall back to the 3-signal proxy set below
+    when direct evidence does not exist.
+  direct_evidence:
+    high_min_utilization: 0.90
+    medium_utilization_range: [0.75, 0.89]
+    description: >
+      Used only when an authoritative source (e.g. airport master plan,
+      official capacity study) reports actual terminal/gate utilization or
+      a material bottleneck finding. This is the only path to a "direct"
+      (non-proxy) Passenger-Side Pressure classification.
+  proxy_signals:
+    load_factor_min: 0.85
+    load_factor_caveat: >
+      Load factor measures AIRCRAFT SEAT utilization (passengers / seats on
+      operated flights), not terminal or landside capacity. It is one
+      demand-intensity signal that may contribute to a passenger-pressure
+      proxy classification, but it must NEVER be described as direct
+      terminal-capacity evidence, and must never alone justify a terminal
+      or gate investment recommendation.
+    passengers_per_departure_growth_min: 0.05
+    passengers_per_departure_growth_caveat: >
+      A passenger-density proxy, not a measurement of terminal utilization.
+    passenger_vs_departure_cagr_gap_min_pp: 3
+    passenger_vs_departure_cagr_gap_caveat: >
+      Indicates passengers are growing faster than flights (denser
+      loadings), not that a terminal building is physically full.
+  proxy_classification_rule:
+    high: all_three_signals_triggered
+    medium: one_or_two_signals_triggered
+    low: no_signals_triggered
+    labeling: >
+      Any result reached via proxy_signals (rather than direct_evidence)
+      must be labeled "proxy" in the output and must lower Confidence.
+
+flight_side_pressure:
+  kind: proxy_signal
+  description: >
+    Flight-side (airside/airfield) capacity pressure. Prefer DIRECT evidence
+    (runway utilization, official bottleneck finding) when available.
+  direct_evidence:
+    high_min_runway_utilization: 0.90
+    description: >
+      Used only with authoritative runway-capacity evidence or an official
+      bottleneck finding. Delay/cancellation/taxi signals below are proxies
+      for congestion, not proof of a specific infrastructure bottleneck —
+      cause attribution (see bottleneck taxonomy) is required before
+      recommending physical runway/airfield investment.
+  proxy_signals:
+    departure_delay_rate_min: 0.25
+    median_taxi_out_minutes_min: 20
+    cancellation_rate_min: 0.03
+  proxy_classification_rule:
+    high: direct_evidence_or_official_bottleneck_or_two_plus_signals
+    medium: one_signal_triggered
+    low: no_signals_triggered
+    insufficient: core_operational_coverage_missing
+    labeling: >
+      Delay can result from airline operations, weather, or airspace/ATC —
+      not only physical airfield constraints. Cause attribution (BTS
+      carrier/weather/NAS/security/late-aircraft codes) and, where
+      triggered, Research Agent findings are required before a Flight-Side
+      Pressure classification is used to support a runway/airfield
+      investment recommendation specifically.
+
+congestion_level:
+  kind: proxy_signal
+  description: >
+    Used for direct airport-vs-airport comparisons. Reuses the
+    flight_side_pressure proxy signal set applied consistently across the
+    compared airports, rather than being an independently defined metric.
+  classification_rule:
+    high: at_least_two_primary_signals_triggered
+    medium: one_signal_triggered
+    low: no_signals_triggered
+  tie_break_order:
+    - triggered_signal_count
+    - departure_delay_rate
+    - median_taxi_out_minutes
+    - cancellation_rate
+
+# ---------------------------------------------------------------------------
+# Need Level combination table (derived, not an independent threshold)
+# ---------------------------------------------------------------------------
+need_level:
+  kind: descriptive_classification
+  description: >
+    Derived from Demand Level x the pressure relevant to the requested
+    investment focus. Not a raw threshold — a fixed combination table.
+  combination_table:
+    - {demand: high,   relevant_pressure: high,   need: high}
+    - {demand: high,   relevant_pressure: medium, need: high}
+    - {demand: medium, relevant_pressure: high,   need: high}
+    - {demand: medium, relevant_pressure: medium, need: medium}
+    - {demand: low,    relevant_pressure: high,   need: medium}
+    - {demand: high,   relevant_pressure: low,    need: medium}
+    - default: low
+
+# ---------------------------------------------------------------------------
+# Changelog
+# ---------------------------------------------------------------------------
+# 2026-09-13  Initial MVP defaults, ported from the approved project plan.
+#             No empirical calibration performed yet. Pending: sanity check
+#             across a diverse airport sample once live data access works.
+# 2026-09-13  Discovered during T-100 connector implementation: BTS T-100
+#             Segment data includes cargo-only operations (zero passengers,
+#             nonzero departures). At ANC 2024, cargo-only routes are ~55%
+#             of total departures. long_haul_basis_default's "scheduled
+#             passenger departures" definition requires filtering these out
+#             before computing long-haul share — see
+#             data/clients/bts_t100.py:filter_passenger_routes. Without this
+#             filter the calculated share is materially wrong (45% vs the
+#             correct ~14% for ANC 2024).

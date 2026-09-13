@@ -1,0 +1,15 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node / React
+ui/node_modules/
+ui/dist/
+
+# OS
+.DS_Store
+Thumbs.db
