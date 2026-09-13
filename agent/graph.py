@@ -108,6 +108,20 @@ ranking: a short numbered list. For a comparison: compact side-by-side. A clarif
 definition doesn't need this structure -- just answer directly and briefly."""
 
 
+# Human-readable status text per tool name, shown live in the UI while a
+# tool is running (see run_turn_streaming below). Kept here, next to the
+# tool list, so a new tool added to ALL_TOOLS is easy to remember to add a
+# status line for -- falls back to a generic "Using {tool}..." if missed.
+_TOOL_STATUS_TEXT = {
+    "find_airports_tool": "Looking up airports",
+    "get_airport_profile_tool": "Pulling airport data",
+    "compare_airports_tool": "Comparing airports",
+    "rank_airports_tool": "Ranking candidates",
+    "find_nearby_airports_tool": "Calculating distances",
+    "research_airport_facts_tool": "Researching official sources",
+}
+
+
 def build_agent(provider: ModelProvider):
     return create_react_agent(provider.model, tools=ALL_TOOLS)
 
@@ -153,3 +167,86 @@ async def run_turn(state: ConversationState, conversation_id: str, user_message:
     state["step_count"] = len(result["messages"])
     state["last_failure"] = None
     return state
+
+
+async def run_turn_streaming(state: ConversationState, conversation_id: str, user_message: str):
+    """Same turn as run_turn, but yields live status events as the agent
+    works, via LangGraph's astream_events (confirmed live: on_tool_start /
+    on_tool_end fire with the real tool name as each tool actually runs --
+    this is what lets the UI show "Ranking candidates..." instead of a
+    generic spinner). The caller (api/main.py's SSE endpoint) forwards each
+    yielded dict to the client as it arrives.
+
+    Yields dicts of one of these shapes:
+        {"type": "status", "text": "..."}          -- a tool started/ended
+        {"type": "done", "text": "<final answer>"}  -- the turn completed
+        {"type": "error", "text": "<safe message>"} -- the turn failed
+
+    Provider fallback still applies: if the streaming provider fails
+    partway through (e.g. mid-turn rate limit), the WHOLE turn is retried
+    non-streaming via run_with_fallback on the next provider -- consistent
+    with run_turn's existing fallback semantics, so a fallback never
+    produces a half-finished streamed answer silently spliced with a
+    different provider's continuation.
+    """
+    state["messages"].append({"role": "user", "content": user_message})
+    state["step_count"] = 0
+    providers = build_providers()
+
+    input_messages = [{"role": "system", "content": SYSTEM_PROMPT}, *state["messages"]]
+    last_exc: Exception | None = None
+
+    for provider in providers:
+        agent = build_agent(provider)
+        final_result = None
+        try:
+            async for event in agent.astream_events(
+                {"messages": input_messages},
+                version="v2",
+                config={"recursion_limit": MAX_STEPS * 2 + 1},
+            ):
+                kind = event["event"]
+                if kind == "on_tool_start":
+                    name = event.get("name", "")
+                    yield {"type": "status", "text": _TOOL_STATUS_TEXT.get(name, f"Using {name}")}
+                elif kind == "on_chain_end" and event.get("name") == "LangGraph":
+                    # CONFIRMED LIVE: "LangGraph" is the top-level graph-run
+                    # event carrying the FULL accumulated messages list.
+                    # "agent"/"call_model" also fire on_chain_end with an
+                    # "output" containing messages, but only the messages
+                    # from that one node -- using those instead would
+                    # silently truncate multi-step (tool-calling) turns to
+                    # just the last node's output.
+                    data = event.get("data", {}) or {}
+                    output = data.get("output")
+                    if isinstance(output, dict) and "messages" in output:
+                        final_result = output
+            if final_result is not None:
+                state["messages"] = final_result["messages"]
+                state["step_count"] = len(final_result["messages"])
+                state["last_failure"] = None
+                text = _extract_final_text(final_result["messages"])
+                yield {"type": "done", "text": text}
+                return
+            last_exc = RuntimeError("Stream ended without a final result")
+        except Exception as exc:  # noqa: BLE001 - provider fallback boundary, same as run_with_fallback
+            last_exc = exc
+            logger.warning("run_turn_streaming: provider=%s failed (%s), trying next", provider.name, type(exc).__name__)
+            continue
+
+    logger.error("run_turn_streaming failed: %r", last_exc, exc_info=True)
+    state["last_failure"] = f"{type(last_exc).__name__}: {last_exc}" if last_exc else "unknown"
+    fallback_text = "I'm having trouble processing that right now. Could you try again in a moment?"
+    state["messages"].append({"role": "assistant", "content": fallback_text})
+    yield {"type": "error", "text": fallback_text}
+
+
+def _extract_final_text(messages: list) -> str:
+    last_message = messages[-1]
+    if isinstance(last_message, dict):
+        content = last_message.get("content")
+    else:
+        content = getattr(last_message, "content", None)
+    if isinstance(content, list):
+        content = "".join(b.get("text", "") for b in content if isinstance(b, dict))
+    return content or ""

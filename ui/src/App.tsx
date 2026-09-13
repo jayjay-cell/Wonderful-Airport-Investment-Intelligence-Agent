@@ -1,95 +1,103 @@
-import { useEffect, useRef, useState } from "react";
-import { ChatApiError, checkHealth, sendMessage } from "./api";
+import { useEffect, useState } from "react";
+import { checkHealth, sendMessageStreaming } from "./api";
 import { ChatComposer } from "./components/ChatComposer";
-import { ConversationView, Message } from "./components/ConversationView";
+import { ConversationView } from "./components/ConversationView";
 import { WelcomeScreen } from "./components/WelcomeScreen";
-
-// Lightweight perceived-latency mechanism (Section 7): no SSE/streaming
-// backend change — cycling status text client-side while the one blocking
-// POST /chat call is in flight. This is deliberately the smallest clean
-// mechanism rather than a real progress protocol, so it doesn't delay the
-// actual performance fixes; it just gives the user a sense of what stage
-// a slow request is likely in.
-const PROGRESS_STEPS = [
-  "Understanding your question…",
-  "Identifying candidate airports…",
-  "Loading aviation data…",
-  "Scoring candidates…",
-  "Preparing your answer…",
-];
-const PROGRESS_STEP_INTERVAL_MS = 3500;
+import { Sidebar } from "./components/Sidebar";
+import { Conversation, deriveTitle, formatMeta } from "./conversation";
+import moreHorizontalIcon from "./assets/more-horizontal.svg";
+import shareIcon from "./assets/share.svg";
+import chevronDownIcon from "./assets/chevron-down.svg";
 
 export default function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [liveStatus, setLiveStatus] = useState<string | null>(null);
   const [serverOnline, setServerOnline] = useState(true);
-  const progressTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     checkHealth().then(setServerOnline);
   }, []);
 
-  function stopProgressCycle() {
-    if (progressTimerRef.current !== null) {
-      window.clearInterval(progressTimerRef.current);
-      progressTimerRef.current = null;
-    }
-  }
+  const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
+  const hasConversation = activeConversation !== null && activeConversation.messages.length > 0;
 
-  function startProgressCycle() {
-    let stepIndex = 0;
-    setMessages((prev) => {
-      const withoutPending = prev.filter((m) => !m.pending);
-      return [...withoutPending, { role: "assistant", text: PROGRESS_STEPS[0], pending: true }];
-    });
-    progressTimerRef.current = window.setInterval(() => {
-      stepIndex = Math.min(stepIndex + 1, PROGRESS_STEPS.length - 1);
-      setMessages((prev) => {
-        const withoutPending = prev.filter((m) => !m.pending);
-        return [...withoutPending, { role: "assistant", text: PROGRESS_STEPS[stepIndex], pending: true }];
-      });
-    }, PROGRESS_STEP_INTERVAL_MS);
+  function updateConversation(id: string, updater: (c: Conversation) => Conversation) {
+    setConversations((prev) => prev.map((c) => (c.id === id ? updater(c) : c)));
   }
 
   async function handleSend(text: string) {
-    setMessages((prev) => [...prev, { role: "user", text }]);
-    startProgressCycle();
-    setSending(true);
+    // A brand-new conversation has no backend session_id yet -- use a
+    // temporary client-side id so it can exist in the sidebar/UI state
+    // immediately; it's replaced with the real session_id the moment the
+    // backend's first "session" event arrives (see onSession below).
+    const isNewConversation = activeConversation === null;
+    const tempId = isNewConversation ? `local-${Date.now()}` : activeConversation!.id;
 
-    try {
-      const result = await sendMessage(text, sessionId);
-      setSessionId(result.session_id);
-      setMessages((prev) => {
-        const withoutPending = prev.filter((m) => !m.pending);
-        return [...withoutPending, { role: "assistant", text: result.response }];
-      });
-    } catch (err) {
-      // Show the actual classified failure (which source failed, whether
-      // it's worth retrying) instead of a single generic message for
-      // every possible error — a T-100 timeout, a rate-limited provider,
-      // and a genuinely offline backend are now distinguishable to the
-      // user.
-      const displayText =
-        err instanceof ChatApiError
-          ? err.message
-          : "Sorry — something went wrong processing that request.";
-      setMessages((prev) => {
-        const withoutPending = prev.filter((m) => !m.pending);
-        return [...withoutPending, { role: "assistant", text: displayText }];
-      });
-    } finally {
-      stopProgressCycle();
-      setSending(false);
+    if (isNewConversation) {
+      const newConvo: Conversation = {
+        id: tempId,
+        title: deriveTitle(text),
+        meta: formatMeta(1),
+        messages: [{ role: "user", text }],
+      };
+      setConversations((prev) => [newConvo, ...prev]);
+      setActiveId(tempId);
+    } else {
+      updateConversation(tempId, (c) => ({
+        ...c,
+        messages: [...c.messages, { role: "user", text }],
+      }));
     }
+
+    setSending(true);
+    setLiveStatus("Thinking");
+
+    let realId = tempId;
+    const sessionIdForRequest = isNewConversation ? null : activeConversation!.id;
+
+    await sendMessageStreaming(text, sessionIdForRequest, {
+      onSession: (sessionId) => {
+        if (isNewConversation && sessionId !== tempId) {
+          realId = sessionId;
+          setConversations((prev) =>
+            prev.map((c) => (c.id === tempId ? { ...c, id: sessionId } : c))
+          );
+          setActiveId(sessionId);
+        }
+      },
+      onStatus: (text) => setLiveStatus(text),
+      onDone: (answerText) => {
+        updateConversation(realId, (c) => ({
+          ...c,
+          messages: [...c.messages, { role: "assistant", text: answerText }],
+          meta: formatMeta(c.messages.length + 1),
+        }));
+        setLiveStatus(null);
+        setSending(false);
+      },
+      onError: (message) => {
+        updateConversation(realId, (c) => ({
+          ...c,
+          messages: [...c.messages, { role: "assistant", text: message, isError: true }],
+        }));
+        setLiveStatus(null);
+        setSending(false);
+      },
+    });
   }
 
-  useEffect(() => () => stopProgressCycle(), []);
+  function handleNewConversation() {
+    setActiveId(null);
+  }
 
-  const hasConversation = messages.length > 0;
+  function handleSelectConversation(id: string) {
+    setActiveId(id);
+  }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell app-shell--${hasConversation ? "conversation" : "welcome"}`}>
       {!hasConversation ? (
         <div className="welcome-panel">
           {!serverOnline && (
@@ -97,38 +105,64 @@ export default function App() {
               Backend server is unreachable at /api — start the FastAPI server and refresh.
             </div>
           )}
-          <WelcomeScreenContent onSelectSuggestion={handleSend} sending={sending} />
+          <WelcomeScreen onSelectSuggestion={handleSend} />
+          <ChatComposer onSend={handleSend} disabled={sending} showLabel />
         </div>
       ) : (
-        <div className="conversation-shell">
-          {!serverOnline && (
-            <div className="offline-banner">
-              Backend server is unreachable at /api — start the FastAPI server and refresh.
+        <div className="app-frame">
+          <Sidebar
+            conversations={conversations}
+            activeConversationId={activeId}
+            onSelectConversation={handleSelectConversation}
+            onNewConversation={handleNewConversation}
+          />
+          <div className="main-panel">
+            <div className="topbar">
+              <div className="topbar-title-group">
+                <p className="topbar-title">{activeConversation!.title}</p>
+                <div className="topbar-icon-btn topbar-icon-btn--tint">
+                  <img src={chevronDownIcon} alt="" width={12} height={12} />
+                </div>
+              </div>
+              <div className="topbar-actions">
+                <button className="topbar-icon-btn" title="Share">
+                  <img src={shareIcon} alt="" width={16} height={16} />
+                </button>
+                <button className="topbar-icon-btn" title="More">
+                  <img src={moreHorizontalIcon} alt="" width={16} height={16} />
+                </button>
+              </div>
             </div>
-          )}
-          <ConversationView messages={messages} />
-          <ChatComposer onSend={handleSend} disabled={sending} />
+
+            {!serverOnline && (
+              <div className="offline-banner offline-banner--inline">
+                Backend server is unreachable at /api — start the FastAPI server and refresh.
+              </div>
+            )}
+
+            <ConversationView messages={activeConversation!.messages} liveStatus={liveStatus} />
+
+            <div className="composer-zone">
+              <div className="composer-zone-meta">
+                <div className="composer-zone-badge">
+                  <span className="composer-zone-badge-dot" />
+                  <span>Aero Intel</span>
+                  <img src={chevronDownIcon} alt="" width={14} height={14} />
+                </div>
+                <p className="composer-zone-disclaimer">
+                  Aero Intel can make errors. Verify key data independently.
+                </p>
+              </div>
+              <ChatComposer
+                onSend={handleSend}
+                disabled={sending}
+                compact
+                placeholder="Ask a follow-up or start a new analysis..."
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>
-  );
-}
-
-// WelcomeScreen renders its own .welcome-panel wrapper + bg-glow; here we
-// need the composer nested inside that same panel (per the Figma layout),
-// so this thin wrapper renders WelcomeScreen's inner content plus the
-// composer as siblings within App's own .welcome-panel above.
-function WelcomeScreenContent({
-  onSelectSuggestion,
-  sending,
-}: {
-  onSelectSuggestion: (text: string) => void;
-  sending: boolean;
-}) {
-  return (
-    <>
-      <WelcomeScreen onSelectSuggestion={onSelectSuggestion} />
-      <ChatComposer onSend={onSelectSuggestion} disabled={sending} showLabel />
-    </>
   );
 }

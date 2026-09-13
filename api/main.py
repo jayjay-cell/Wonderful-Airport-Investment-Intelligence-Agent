@@ -14,12 +14,13 @@ load_dotenv()  # must run before agent.providers.build_providers reads os.enviro
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
+import json
 import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from api.schemas import ChatRequest, ChatResponse
 from api.session_store import get_state, new_session_id, save_state
@@ -82,3 +83,41 @@ async def chat(request: ChatRequest) -> ChatResponse:
     reply_text = reply_text or ""
 
     return ChatResponse(session_id=session_id, response=reply_text)
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    """Server-Sent Events variant of /chat: emits live status lines as the
+    agent calls each tool (see agent.graph.run_turn_streaming), then a
+    final "done" event with the full answer. Same session/state semantics
+    as /chat -- this is an additive endpoint, not a replacement; /chat
+    still works unchanged for any caller that doesn't need live status.
+    """
+    from agent.graph import run_turn_streaming
+
+    if not request.message or not request.message.strip():
+        return JSONResponse(status_code=400, content={"error": "INVALID_REQUEST", "detail": "message is required."})
+
+    session_id = request.session_id or new_session_id()
+    state = get_state(session_id)
+
+    async def event_source():
+        # session_id is sent first so the client learns it even if the
+        # request started without one (a fresh conversation) -- mirrors
+        # what the non-streaming /chat response carries in its body.
+        yield f"event: session\ndata: {json.dumps({'session_id': session_id})}\n\n"
+        try:
+            async for event in run_turn_streaming(state, session_id, request.message.strip()):
+                yield f"event: {event['type']}\ndata: {json.dumps({'text': event['text']})}\n\n"
+        finally:
+            # Persist whatever state run_turn_streaming left behind even if
+            # the client disconnects mid-stream (e.g. page navigated away)
+            # -- the turn's tool calls already happened and their cost was
+            # already paid, so the result should not be silently dropped.
+            save_state(session_id, state)
+
+    return StreamingResponse(
+        event_source(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
