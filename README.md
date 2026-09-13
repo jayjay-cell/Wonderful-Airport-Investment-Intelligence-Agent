@@ -15,7 +15,7 @@ Requirements: Python 3.11+, Node 18+, and one LLM API key ([Groq](https://consol
 python -m pip install -r requirements.txt
 cp .env.example .env   # add at least one API key
 
-cd ui && npm install
+npm --prefix ui install
 ```
 
 ## Run
@@ -25,7 +25,7 @@ python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 ```
 
 ```bash
-cd ui && npm run dev
+npm --prefix ui run dev
 ```
 
 Open the printed URL (usually `http://localhost:5173`). The Vite dev server
@@ -38,9 +38,9 @@ curl http://127.0.0.1:8000/health   # {"status":"ok"}
 ## How it works
 
 A LangGraph ReAct agent with six tools. Full conversation history goes back
-to the model every turn — no summarization to drift out of sync. The model
-picks tools; every number it reports comes from deterministic Python, never
-from the model itself.
+to the model every turn — no summarization to drift out of sync. Every
+analytical metric, comparison, and score is computed deterministically in
+Python; the LLM selects which tools to call and explains the results.
 
 ```
 message → FastAPI → ReAct agent → tools → core/ (scoring) → data/clients/ (live FAA/BTS)
@@ -50,7 +50,7 @@ message → FastAPI → ReAct agent → tools → core/ (scoring) → data/clien
 
 | Tool | Does |
 |---|---|
-| `find_airports_tool` | region/state/city/name → candidate airports |
+| `find_airports_tool` | region/state → candidate airports |
 | `get_airport_profile_tool` | one airport's metrics — demand, delays, load factor, long-haul share, forecast |
 | `compare_airports_tool` | 2+ airports side by side, with a congestion score |
 | `rank_airports_tool` | opportunity ranking in a region, or single-metric ranking |
@@ -82,20 +82,20 @@ Compare it with JFK.           → resolves "it"
 
 ## Response time
 
-All five data sources are live — no cached snapshot shipped with the repo —
-so the first query touching a given year pays real cost. BTS T-100 has no
-API (it's a scripted government form submission) and BTS On-Time means
-downloading and merging 12 monthly files. Both are cached by the shared
-national resource, not per airport, so this is paid once per year, not once
-per question. A cold query can take 30–90s; a repeat query for the same
-period is a couple of seconds.
+Data is fetched at runtime from official FAA/BTS sources; no demo snapshot
+is bundled. The first query touching a given year pays real cost — BTS
+T-100 has no API (it's a scripted government form submission) and BTS
+On-Time means downloading and merging 12 monthly files. Both are cached by
+the shared national resource, not per airport, so this is paid once per
+year, not once per question. A cold query can take 30–90s; a repeat query
+for the same period is a couple of seconds.
 
 ## API
 
 **`POST /chat`**
 ```json
 // → {"session_id": null | "…", "message": "What % of ANC flights are long-haul?"}
-// ← {"session_id": "…", "response": "About 17.7% of performed passenger departures…"}
+// ← {"session_id": "…", "response": "About X% of performed passenger departures…"}
 ```
 Pass the returned `session_id` back to continue a conversation.
 

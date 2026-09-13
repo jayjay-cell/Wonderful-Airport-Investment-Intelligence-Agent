@@ -34,9 +34,9 @@ docstring.
 | Explain the result in prose | LLM |
 | Find facts FAA/BTS don't hold | LLM + web search, sourced only |
 
-The model never computes or restates a score — it relays the number a tool
-returns, or states a limitation. That's what keeps hallucination risk
-confined to phrasing rather than to invented numbers.
+The model never independently calculates or modifies a score — it relays
+the number a tool returns, or states a limitation. That's what keeps
+hallucination risk confined to phrasing rather than to invented numbers.
 
 ## Scoring
 
@@ -83,7 +83,7 @@ as such, never silently upgraded to direct evidence.
 
 | Tool | Does |
 |---|---|
-| `find_airports_tool` | region/state/city/name → candidate airports |
+| `find_airports_tool` | region/state → candidate airports |
 | `get_airport_profile_tool` | one airport's full metric set, each field labeled direct/proxy/missing |
 | `compare_airports_tool` | 2+ airports, common period, congestion score |
 | `rank_airports_tool` | opportunity ranking (screens by volume, scores a shortlist) or single-metric ranking |
