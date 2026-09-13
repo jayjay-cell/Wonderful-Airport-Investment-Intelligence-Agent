@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from core.metrics import as_metric_value, cagr, load_factor as calc_load_factor, passengers_per_departure as calc_ppd
 from core.models import AirportProfile, Evidence, HubClass
 from core.service_period import latest_complete_year, trailing_years
+from core.timing import timed
 from data.clients import bts_on_time, bts_t100, faa_airports, faa_enplanements, faa_taf
 from data.degradation import SourceUnavailable
 
@@ -68,16 +69,17 @@ def get_airport_profile(airport_code: str, trend_years: int = 3, include_bts: bo
             return exc
 
     workers = 4 if include_bts else 2
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        f_enp = pool.submit(_fetch_enplanements)
-        f_taf = pool.submit(_fetch_taf)
-        f_t100 = pool.submit(_fetch_t100) if include_bts else None
-        f_ontime = pool.submit(_fetch_on_time) if include_bts else None
+    with timed("airport_profile.load_sources", airport=code, include_bts=include_bts):
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            f_enp = pool.submit(_fetch_enplanements)
+            f_taf = pool.submit(_fetch_taf)
+            f_t100 = pool.submit(_fetch_t100) if include_bts else None
+            f_ontime = pool.submit(_fetch_on_time) if include_bts else None
 
-        enp_record = f_enp.result()
-        taf_result = f_taf.result()
-        t100_result = f_t100.result() if f_t100 else None
-        ontime_result = f_ontime.result() if f_ontime else None
+            enp_record = f_enp.result()
+            taf_result = f_taf.result()
+            t100_result = f_t100.result() if f_t100 else None
+            ontime_result = f_ontime.result() if f_ontime else None
 
     if not include_bts:
         limitations.append(
@@ -152,6 +154,10 @@ def get_airport_profile(airport_code: str, trend_years: int = 3, include_bts: bo
     if total_departures and total_passengers_t100:
         ppd_value = calc_ppd(total_passengers_t100, total_departures)
 
+    # bts_on_time now returns pre-aggregated per-airport metrics (computed
+    # once during the shared national parse — see data/clients/bts_on_time.py)
+    # rather than a raw flight-record list, so no per-profile aggregation is
+    # needed here.
     if ontime_result is None:
         delay_rate_value = None
         cancellation_rate_value = None
@@ -165,21 +171,10 @@ def get_airport_profile(airport_code: str, trend_years: int = 3, include_bts: bo
         limitations.append(f"BTS On-Time Performance unavailable: {ontime_result.detail}")
     else:
         ontime = ontime_result
-        flights = ontime["flights"]
-        eligible = len(flights)
-        delayed = sum(1 for f in flights if (f["dep_del15"] or 0) >= 1)
-        cancelled = sum(1 for f in flights if f["cancelled"])
-        taxi_outs = [f["taxi_out_minutes"] for f in flights if f["taxi_out_minutes"] is not None]
-        median_taxi = sorted(taxi_outs)[len(taxi_outs) // 2] if taxi_outs else None
-
-        delay_causes = {"carrier": 0.0, "weather": 0.0, "nas": 0.0, "security": 0.0, "late_aircraft": 0.0}
-        for f in flights:
-            for k, v in f["delay_causes"].items():
-                if v:
-                    delay_causes[k] += v
-
-        delay_rate_value = (delayed / eligible) if eligible else None
-        cancellation_rate_value = (cancelled / eligible) if eligible else None
+        delay_rate_value = ontime.get("delay_rate")
+        cancellation_rate_value = ontime.get("cancellation_rate")
+        median_taxi = ontime.get("median_taxi_out_minutes")
+        delay_causes = ontime.get("delay_causes")
 
     profile = AirportProfile(
         airport=airport,

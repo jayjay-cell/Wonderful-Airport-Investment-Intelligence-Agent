@@ -52,7 +52,7 @@ def _load_table() -> dict[str, dict]:
         return resp.content
 
     try:
-        content = with_retry(_fetch, retries=0)
+        content = with_retry(_fetch, retries=1, backoff_seconds=0.3)
     except Exception as exc:
         raise SourceUnavailable(
             source_name="FAA Commercial Service Enplanements",
@@ -92,6 +92,23 @@ def get_enplanements(airport_code: str) -> dict | None:
     non-commercial or very-low-volume facility)."""
     table = _load_table()
     return table.get(airport_code.strip().upper())
+
+
+def get_all_enplanements(state: str | None = None) -> list[dict]:
+    """Returns every airport's enplanements record from the already-cached
+    national table (one shared download regardless of how many airports
+    are requested — see module docstring). Used for national/regional
+    ranking-by-passenger-volume questions (e.g. "largest US airport by
+    passengers") without a separate per-airport fetch loop.
+
+    Optional `state` filters to a single state code (e.g. "AK").
+    """
+    table = _load_table()
+    records = list(table.values())
+    if state:
+        state_upper = state.strip().upper()
+        records = [r for r in records if (r.get("state") or "").strip().upper() == state_upper]
+    return records
 
 
 def source_metadata() -> dict:

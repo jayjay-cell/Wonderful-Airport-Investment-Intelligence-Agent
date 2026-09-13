@@ -10,6 +10,12 @@ __pycache__/
 ui/node_modules/
 ui/dist/
 
+# Runtime artifacts — never commit process/server state
+*.pid
+*.log
+.claude/scheduled_tasks.lock
+.claude/*.lock
+
 # OS
 .DS_Store
 Thumbs.db

@@ -94,6 +94,34 @@ def rank_airports(
 
 
 @tool
+def rank_airports_by_metric(
+    metric: str,
+    region: str = "",
+    state: str = "",
+    year: int = 0,
+    limit: int = 10,
+) -> str:
+    """Rank US commercial-service airports nationally (or within a region/
+    state) by ONE specific measure. metric must be one of: "enplanements"
+    (annual passenger volume), "passenger_growth" (year-over-year % change),
+    "operations" (annual departures), "delay_rate", "cancellation_rate".
+    Use this for questions like "which airport is largest by passengers",
+    "which airport has the most annual passengers", "which airports have
+    the highest delay rate" — i.e. a straightforward national/regional
+    ranking by a single number, NOT a multi-factor investment-opportunity
+    ranking (use rank_airports for that). If the user's notion of "largest"
+    is ambiguous (passengers vs. operations vs. physical area), ask which
+    they mean before calling this tool — do not guess. Note: physical land
+    area is NOT available via this tool; that would require research."""
+    from agent.tools.rank_by_metric import rank_airports_by_metric as _impl
+    result = _impl(
+        metric=metric, region=region or None, state=state or None,
+        year=year or None, limit=limit,
+    )
+    return json.dumps(_serialize(result), default=str)
+
+
+@tool
 def assess_airport_opportunity(
     airport_code: str,
     investment_focus: str = "general_modernization",
@@ -114,5 +142,6 @@ ALL_TOOLS = [
     calculate_long_haul_share,
     compare_airports,
     rank_airports,
+    rank_airports_by_metric,
     assess_airport_opportunity,
 ]
