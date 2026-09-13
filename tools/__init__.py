@@ -1,36 +1,43 @@
 # ORIENTATION: THE TOOL REGISTRY. ALL_TOOLS is the list the ReAct agent binds and calls directly.
 """Aero Intel's domain tools, LangChain @tool-decorated directly on the
 functions that do the real work -- one file per capability, no separate
-wrapper layer. The ReAct loop (agent/graph.py) calls these directly; there
-is no Planner/Executor/Answer staging in front of them (see agent/graph.py's
-docstring for why that staging was removed).
+wrapper layer. The ReAct loop (agent/graph.py) calls these directly.
 
-Each tool: fetches from data/, computes/classifies via core/, returns a
-plain dict the model reads directly. No tool here decides what the FINAL
-answer is -- core/ owns every calculation and classification; a tool's job
-ends at returning the structured result.
+Each tool fetches from data/ and, where relevant, scores via core/scoring.py.
+A tool's job ends at returning the structured result -- no tool decides the
+final answer's wording; that's the model's job.
 
-7 tools, not 9: two mergers, both for the same reason -- eliminate two
-similarly-shaped tools competing for the same question, which is what
-caused a real bug (the model skipping compare_airports_tool in favor of
-calling get_airport_profile_tool twice).
+6 tools. Two deletions since the previous count of 7/9, both because
+the underlying calculation they depended on was removed on explicit
+instruction ("only calculation is comparison and ranking"):
 
-1. rank_airports_by_metric merged into rank_airports_tool as one dispatcher
-   with a metric/investment_focus switch. tools/rank_by_metric.py still
-   holds the single-metric logic as a plain function, called internally --
-   same pattern as get_airport_profile (a real building block, not a
-   duplicate entry point the model can pick wrong).
+1. assess_airport_opportunity_tool deleted outright. It ran a 7-stage
+   classification pipeline (Demand -> Pressure -> Need -> Bottleneck ->
+   Fit -> Gates -> Actionability -> Confidence -> Final label) most of
+   which gated on ResearchEvidence that was never actually populated
+   anywhere, so most branches were structurally unreachable in real use.
+   A single-airport investment question ("is SFO a good investment", "what's
+   the unmet demand at SFO and why") is now answered by the model composing
+   get_airport_profile_tool (real numbers) + research_airport_facts_tool
+   (real context), not a dedicated scoring tool -- per explicit instruction
+   that simple ad hoc explanation from structured data is the LLM's job,
+   not a new core/ function's.
 
-2. calculate_long_haul_share_tool was deleted outright. get_airport_profile
-   already fetched the exact per-route T-100 data long-haul share needs
-   (to compute departures/passengers/seats totals) and threw the route-level
-   detail away right after -- a second tool was re-fetching the same data
-   just to re-derive it. Long-haul share is now computed once, inside
-   get_airport_profile, and returned as two of its fields
-   (long_haul_share_departures, long_haul_share_passengers).
+2. rank_airports_by_metric was already merged into rank_airports_tool (one
+   dispatcher, metric/investment_focus switch) in an earlier pass;
+   tools/rank_by_metric.py still holds that single-metric logic as a plain
+   function called internally.
+
+3. calculate_long_haul_share_tool was already deleted in an earlier pass --
+   long-haul share is computed once inside get_airport_profile and returned
+   as two of its fields.
+
+The two remaining calculations -- congestion_score() and opportunity_score()
+(core/scoring.py) -- are used ONLY by compare_airports_tool and
+rank_airports_tool respectively. Nothing else in this codebase computes a
+score.
 """
 
-from tools.assess_opportunity import assess_airport_opportunity_tool
 from tools.compare_airports import compare_airports_tool
 from tools.find_airports import find_airports_tool
 from tools.find_nearby_airports import find_nearby_airports_tool
@@ -44,6 +51,5 @@ ALL_TOOLS = [
     compare_airports_tool,
     rank_airports_tool,
     find_nearby_airports_tool,
-    assess_airport_opportunity_tool,
     research_airport_facts_tool,
 ]

@@ -6,7 +6,7 @@ direct/proxy/missing.
 Also exposed as a LangChain tool so the model can call it directly for a
 plain "what's the delay rate at SFO"-type question, but most of its real
 use is as a plain Python function other tools (compare_airports,
-rank_airports, assess_airport_opportunity) call into.
+rank_airports) call into.
 """
 
 from __future__ import annotations
@@ -232,6 +232,9 @@ def get_airport_profile_tool(airport_code: str, long_haul_threshold_miles: float
     threshold -- default 1500 statute miles, this system's configured
     definition). Each field is labeled direct/proxy/missing. Use this for
     any single-airport factual lookup, including "what % of flights from X
-    are long-haul" -- it is not a separate tool. Not for a full opportunity
-    assessment (use assess_airport_opportunity_tool for that)."""
+    are long-haul" -- it is not a separate tool. For a single-airport
+    investment question ("is X a good investment", "unmet demand at X"),
+    also use this tool -- there is no dedicated scoring tool for one
+    airport; combine this with research_airport_facts_tool and explain the
+    answer yourself from the returned numbers."""
     return _serialize(get_airport_profile(airport_code, long_haul_threshold_miles=long_haul_threshold_miles))

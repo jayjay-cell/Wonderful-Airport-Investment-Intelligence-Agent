@@ -26,22 +26,33 @@ def rank_airports_by_metric(metric: str, region: str | None = None, state: str |
     limit = max(1, min(limit, 50))
     year = year or latest_complete_year()
 
-    state_filter = state
+    state_filter = None
     if region and not state:
         if is_national_scope(region):
             # "United States" etc. means NO filter, not an unrecognized
             # region -- a national single-metric ranking is the normal case
             # for "which airport is largest in the US".
             states = None
-            state_filter = None
         else:
             from data.regions import resolve_region
             states = resolve_region(region)
             if states is None:
                 return {"error": "AMBIGUOUS_QUERY", "detail": f"{region!r} is not a recognized region. Try a specific state code instead."}
-            state_filter = None
+    elif state:
+        # Same expectation as find_airports_tool: `state` must be the
+        # 2-letter USPS code. The model converts a full name itself (see
+        # rank_airports_tool's docstring) -- no static lookup table here.
+        code = state.strip().upper()
+        if len(code) != 2 or not code.isalpha():
+            return {
+                "error": "AMBIGUOUS_QUERY",
+                "detail": f"{state!r} is not a 2-letter US state code. Convert it to "
+                          f"the standard USPS code first (e.g. California -> CA).",
+            }
+        state_filter = code
+        states = [code]
     else:
-        states = [state_filter] if state_filter else None
+        states = None
 
     try:
         if states and len(states) > 1:

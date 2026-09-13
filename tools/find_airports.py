@@ -63,7 +63,23 @@ def find_airports(region: str | None = None, state: str | None = None, commercia
                           f"{known}. Try passing a specific state instead.",
             }
     elif state:
-        states = [state.strip().upper()]
+        # The tool takes a 2-letter USPS code (see find_airports_tool's
+        # docstring, which tells the MODEL to convert "California" -> "CA"
+        # itself before calling -- an LLM already knows every US state
+        # abbreviation, so a static 50-entry lookup table here would just
+        # be duplicating knowledge the model already has. FAA's STATE_CODE
+        # field only matches 2-letter codes, so if a non-code string slips
+        # through anyway, fail with a clear error rather than silently
+        # returning zero airports (found live: "California".upper() ==
+        # "CALIFORNIA" matched nothing and looked like "no airports here").
+        code = state.strip().upper()
+        if len(code) != 2 or not code.isalpha():
+            return {
+                "error": "AMBIGUOUS_QUERY",
+                "detail": f"{state!r} is not a 2-letter US state code. Convert it to "
+                          f"the standard USPS code first (e.g. California -> CA).",
+            }
+        states = [code]
     else:
         return {"error": "AMBIGUOUS_QUERY", "detail": "Provide either a region name or a state code/name."}
 
@@ -121,7 +137,14 @@ def _serialize(result: dict) -> dict:
 @tool
 def find_airports_tool(region: str = "", state: str = "", commercial_only: bool = True) -> dict:
     """Find commercial-service US airports by region (e.g. "New England") or
-    by a single state name/code. Provide either region or state, not both.
+    by a single state. Provide either region or state, not both.
+
+    IMPORTANT: `state` must be the 2-letter USPS code (e.g. "CA", "NY", "TX"),
+    not the full state name. Convert it yourself before calling -- e.g. if
+    the user says "California" or "Washington state", pass state="CA" or
+    state="WA". You already know every US state's standard abbreviation;
+    do not pass the full name.
+
     Returns airport identities, location, and hub class. Use this first
     when a question refers to a region or state rather than a specific
     airport code."""

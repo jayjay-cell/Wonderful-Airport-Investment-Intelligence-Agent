@@ -1,10 +1,15 @@
-# ORIENTATION: TOOL. Multi-dimension opportunity ranking within a region/state. Two-tier: screen cheap, deep-assess a shortlist.
-"""rank_airports: two-tier ranking to keep region-wide queries fast.
+# ORIENTATION: TOOL. Opportunity ranking within a region/state. Screens candidates by passenger volume, scores a shortlist.
+"""rank_airports: resolves a region/state into candidate airports, screens
+them cheaply by passenger volume (already returned by find_airports -- no
+extra fetch), then computes opportunity_score() (core/scoring.py) for a
+bounded shortlist and sorts by it.
 
-TIER 1 -- fast screen (FAA-only): every candidate airport in the requested
-region/state gets a quick assessment using only FAA sources.
-TIER 2 -- full assessment (FAA + BTS): only the top candidates from Tier 1
-get the full assessment, including the two slow BTS sources.
+The shortlist bound exists purely for cost: opportunity_score() needs a
+full profile (BTS T-100 + On-Time, the two slow live sources) per
+candidate, and a region can have 20+ airports. Screening by volume first
+and only fully profiling a shortlist is a request-cost decision, not a
+scoring decision -- it does not change how any individual airport is
+scored, only how many get scored before this call returns.
 """
 
 from __future__ import annotations
@@ -15,21 +20,18 @@ from concurrent.futures import ThreadPoolExecutor
 from langchain_core.tools import tool
 
 from core.metrics import latest_complete_year
-from core.models import InvestmentFocus, Level
-from core.ranking import rank_candidates, scope_label
+from core.models import InvestmentFocus
+from core.ranking import scope_label
+from core.scoring import opportunity_score
 from data.clients import bts_on_time, bts_t100
-from tools.assess_opportunity import assess_airport_opportunity
 from tools.find_airports import find_airports
+from tools.get_airport_profile import get_airport_profile
 
 logger = logging.getLogger("tools.rank_airports")
 
-_RESEARCH_TOP_N = 3
-_SCREEN_CONCURRENCY = 10
-_FULL_ASSESS_CONCURRENCY = 5
-_DEFAULT_SHORTLIST_SIZE = 3
-_MAX_SHORTLIST_SIZE = 5
-
-_LEVEL_RANK = {Level.HIGH: 3, Level.MEDIUM: 2, Level.LOW: 1, Level.INSUFFICIENT: 0}
+_DEFAULT_SHORTLIST_SIZE = 8
+_MAX_SHORTLIST_SIZE = 15
+_PROFILE_CONCURRENCY = 8
 
 
 def rank_airports(region: str | None = None, state: str | None = None, investment_focus: str = "general_modernization", top_n: int = 10, shortlist_size: int = _DEFAULT_SHORTLIST_SIZE) -> dict:
@@ -49,25 +51,13 @@ def rank_airports(region: str | None = None, state: str | None = None, investmen
         return {"error": "INSUFFICIENT_DATA", "detail": f"No commercial-service airports found for {discovery['candidate_set_description']}."}
     enplanements_by_code = discovery.get("enplanements_by_code", {})
 
-    def _screen(airport):
-        return airport, assess_airport_opportunity(airport.code, investment_focus=focus.value, research=False, include_bts=False)
-
-    with ThreadPoolExecutor(max_workers=min(_SCREEN_CONCURRENCY, len(all_candidates))) as pool:
-        screen_results = list(pool.map(_screen, all_candidates))
-
-    screened, screen_errors = [], []
-    for airport, result in screen_results:
-        if "error" in result:
-            screen_errors.append({"airport_code": airport.code, **result})
-            continue
-        screened.append((airport, result["assessment"].demand_level.level))
-
-    if not screened:
-        return {"error": "INSUFFICIENT_DATA", "detail": "No candidate airport could even be screened with FAA data.", "errors": screen_errors}
-
-    shortlist_airports = [
-        a for a, _ in sorted(screened, key=lambda pair: (_LEVEL_RANK[pair[1]], enplanements_by_code.get(pair[0].code, 0)), reverse=True)
-    ][:shortlist_size]
+    # Screen by passenger volume -- already have this from find_airports,
+    # no extra fetch. Bigger airports are more likely to be genuinely
+    # relevant investment candidates; this is a cost-bounding heuristic,
+    # not part of the score itself.
+    shortlist_airports = sorted(
+        all_candidates, key=lambda a: enplanements_by_code.get(a.code, 0), reverse=True,
+    )[:shortlist_size]
 
     year = latest_complete_year()
     shortlist_codes = [a.code for a in shortlist_airports]
@@ -80,77 +70,52 @@ def rank_airports(region: str | None = None, state: str | None = None, investmen
     except Exception as exc:
         logger.warning("rank_airports: On-Time pre-warm failed (%s)", exc)
 
-    def _assess_full(airport):
-        return airport, assess_airport_opportunity(airport.code, investment_focus=focus.value, research=False, include_bts=True)
+    def _profile(airport):
+        return airport, get_airport_profile(airport.code, include_bts=True)
 
-    with ThreadPoolExecutor(max_workers=min(_FULL_ASSESS_CONCURRENCY, len(shortlist_airports))) as pool:
-        full_results = list(pool.map(_assess_full, shortlist_airports))
+    with ThreadPoolExecutor(max_workers=min(_PROFILE_CONCURRENCY, len(shortlist_airports))) as pool:
+        profile_results = list(pool.map(_profile, shortlist_airports))
 
-    assessments, assessment_errors, metrics_by_airport = [], [], {}
-
-    for airport, result in full_results:
+    profiles, profile_errors = [], []
+    for airport, result in profile_results:
         if "error" in result:
-            assessment_errors.append({"airport_code": airport.code, **result})
+            profile_errors.append({"airport_code": airport.code, **result})
             continue
+        profiles.append(result["profile"])
 
-        assessment = result["assessment"]
-        assessments.append(assessment)
-        p = result["profile"]
+    if not profiles:
+        return {"error": "INSUFFICIENT_DATA", "detail": "No shortlisted candidate could be profiled.", "errors": profile_errors}
 
-        def _val(metric):
-            return (metric.value if metric is not None else None) or 0.0
-
-        metrics_by_airport[airport.code] = {
-            "passenger_yoy_growth": _val(p.passenger_yoy_growth),
-            "passenger_volume": _val(p.passengers),
-            "departure_delay_rate": _val(p.departure_delay_rate),
-            "departure_cagr": 0.0,
-            "departure_volume": _val(p.departures),
-            "growth": _val(p.passenger_yoy_growth),
-            "volume": _val(p.passengers),
-        }
-
-    if not assessments:
-        return {"error": "INSUFFICIENT_DATA", "detail": "No shortlisted candidate could be fully assessed.", "errors": assessment_errors}
-
-    ranked = rank_candidates(assessments, focus, metrics_by_airport)
-    top = ranked[:top_n]
-    research_pending_for = [a.airport.code for a in ranked[:_RESEARCH_TOP_N]]
+    scored = sorted(
+        ((p, opportunity_score(p, focus)) for p in profiles),
+        key=lambda pair: pair[1].value if pair[1].value is not None else -1,
+        reverse=True,
+    )
+    top = scored[:top_n]
 
     return {
         "investment_focus": focus.value,
         "candidate_set_description": discovery["candidate_set_description"],
         "candidate_count": len(all_candidates),
-        "screened_count": len(screened),
-        "fully_assessed_count": len(assessments),
+        "scored_count": len(profiles),
         "scope_label": scope_label(discovery["candidate_set_description"], is_national=False),
-        "tiered_methodology_note": (
+        "screening_note": (
             f"{len(all_candidates)} commercial-service airports match {discovery['candidate_set_description']}. "
-            f"All were screened using FAA demand data. The top {len(shortlist_airports)} by demand and "
-            f"passenger volume then received a full assessment including live BTS operational data. "
-            f"This keeps response time reasonable for region-wide rankings -- a scoping choice, not a "
-            f"claim that unscreened airports lack opportunity."
+            f"The top {len(shortlist_airports)} by passenger volume were fully profiled and scored. "
+            f"This bounds response time for region-wide rankings -- a cost-scoping choice, not a claim "
+            f"that unscreened airports lack opportunity."
         ),
         "ranked_candidates": [
             {
-                "airport_code": a.airport.code, "airport_name": a.airport.name,
-                "need_level": a.need_level.level.value, "demand_level": a.demand_level.level.value,
-                "passenger_side_pressure": a.passenger_side_pressure.level.value,
-                "flight_side_pressure": a.flight_side_pressure.level.value,
-                "likely_bottleneck": a.likely_bottleneck.value, "investment_fit": a.investment_fit.value,
-                "actionability": a.actionability.value, "final_classification": a.final_classification.value,
-                "confidence": a.confidence.value, "confidence_reason": a.confidence_reason,
-                "limitations": a.limitations,
+                "airport_code": p.airport.code, "airport_name": p.airport.name,
+                "opportunity_score": score.value,
+                "opportunity_score_basis": score.basis,
+                "opportunity_score_missing": score.missing,
+                "limitations": score.limitations,
             }
-            for a in top
+            for p, score in top
         ],
-        "research_note": (
-            f"Research was not invoked for the top {_RESEARCH_TOP_N} preliminary candidates "
-            f"({research_pending_for}) -- Actionability and Investment Fit for these results are "
-            f"based on structured data only and default toward Unknown/Likely rather than Confirmed."
-        ),
-        "screen_errors": screen_errors,
-        "assessment_errors": assessment_errors,
+        "profile_errors": profile_errors,
     }
 
 
@@ -167,16 +132,25 @@ def rank_airports_tool(region: str = "", state: str = "", metric: str = "", inve
       within a region/state. Leave investment_focus empty for this mode.
 
     - Pass `investment_focus` (one of: terminal, gates, runway_airfield,
-      operations_technology, general_modernization) for a multi-factor
-      modernization-candidate ranking -- "which airports are candidates for
-      terminal expansion". This mode requires a region or state (it runs a
-      full assessment per candidate, so it is not offered nationally).
-      Leave metric empty for this mode.
+      operations_technology, general_modernization) for an
+      opportunity_score-based ranking -- "which airports are candidates for
+      terminal expansion". Leave metric empty for this mode.
+
+    For a SINGLE-airport investment question ("is SFO a good investment",
+    "what's the unmet demand at SFO and why") do NOT call this tool --
+    there is no dedicated single-airport scoring tool. Instead call
+    get_airport_profile_tool (real numbers: growth, load factor, delay
+    rate, congestion) and, if useful, research_airport_facts_tool
+    (documented constraints, master plans), then explain the answer
+    yourself from those two structured results.
 
     If the user's notion of "largest"/"best" is ambiguous (passengers vs.
     operations vs. physical area -- physical area has no data source), ask
     which they mean, or default to passenger volume and state that
-    assumption."""
+    assumption.
+
+    `state`, if used, must be the 2-letter USPS code (e.g. "CA", "TX") --
+    convert a full state name yourself before calling."""
     if metric:
         from tools.rank_by_metric import SUPPORTED_METRICS, rank_airports_by_metric
         if metric not in SUPPORTED_METRICS:
