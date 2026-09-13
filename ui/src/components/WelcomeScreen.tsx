@@ -20,22 +20,25 @@ const SUGGESTIONS: SuggestionPrompt[] = [
 
 interface WelcomeScreenProps {
   onSelectSuggestion: (text: string) => void;
+  showBrand?: boolean;
 }
 
-export function WelcomeScreen({ onSelectSuggestion }: WelcomeScreenProps) {
+export function WelcomeScreen({ onSelectSuggestion, showBrand = true }: WelcomeScreenProps) {
   return (
     <>
-      <div className="bg-glow" aria-hidden="true" />
+      {showBrand && <div className="bg-glow" aria-hidden="true" />}
 
-      <div className="brand">
-        <div className="brand-mark">
-          <img src={planeIcon} alt="" width={20} height={20} />
+      {showBrand && (
+        <div className="brand">
+          <div className="brand-mark">
+            <img src={planeIcon} alt="" width={20} height={20} />
+          </div>
+          <div className="brand-copy">
+            <p className="brand-name">Aero Intel</p>
+            <p className="brand-tagline">Airport investment intelligence</p>
+          </div>
         </div>
-        <div className="brand-copy">
-          <p className="brand-name">Aero Intel</p>
-          <p className="brand-tagline">Airport investment intelligence</p>
-        </div>
-      </div>
+      )}
 
       <div className="welcome-area">
         <p className="welcome-headline">

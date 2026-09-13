@@ -22,6 +22,11 @@ export default function App() {
 
   const activeConversation = conversations.find((c) => c.id === activeId) ?? null;
   const hasConversation = activeConversation !== null && activeConversation.messages.length > 0;
+  // Only the very first launch (no conversations exist yet) gets the
+  // standalone full-screen welcome panel. Once any conversation has ever
+  // existed, "New analysis" stays inside the app frame (sidebar + topbar
+  // visible) with the welcome content shown inline instead.
+  const showStandaloneWelcome = !hasConversation && conversations.length === 0;
 
   function updateConversation(id: string, updater: (c: Conversation) => Conversation) {
     setConversations((prev) => prev.map((c) => (c.id === id ? updater(c) : c)));
@@ -97,8 +102,8 @@ export default function App() {
   }
 
   return (
-    <div className={`app-shell app-shell--${hasConversation ? "conversation" : "welcome"}`}>
-      {!hasConversation ? (
+    <div className={`app-shell app-shell--${showStandaloneWelcome ? "welcome" : "conversation"}`}>
+      {showStandaloneWelcome ? (
         <div className="welcome-panel">
           {!serverOnline && (
             <div className="offline-banner">
@@ -119,7 +124,9 @@ export default function App() {
           <div className="main-panel">
             <div className="topbar">
               <div className="topbar-title-group">
-                <p className="topbar-title">{activeConversation!.title}</p>
+                <p className="topbar-title">
+                  {hasConversation ? activeConversation!.title : "New analysis"}
+                </p>
                 <div className="topbar-icon-btn topbar-icon-btn--tint">
                   <img src={chevronDownIcon} alt="" width={12} height={12} />
                 </div>
@@ -140,7 +147,13 @@ export default function App() {
               </div>
             )}
 
-            <ConversationView messages={activeConversation!.messages} liveStatus={liveStatus} />
+            {hasConversation ? (
+              <ConversationView messages={activeConversation!.messages} liveStatus={liveStatus} />
+            ) : (
+              <div className="conversation conversation--empty">
+                <WelcomeScreen onSelectSuggestion={handleSend} showBrand={false} />
+              </div>
+            )}
 
             <div className="composer-zone">
               <div className="composer-zone-meta">
@@ -157,7 +170,9 @@ export default function App() {
                 onSend={handleSend}
                 disabled={sending}
                 compact
-                placeholder="Ask a follow-up or start a new analysis..."
+                placeholder={
+                  hasConversation ? "Ask a follow-up or start a new analysis..." : "Ask Aero Intel about airport demand, yields, or infrastructure moves..."
+                }
               />
             </div>
           </div>
